@@ -4736,18 +4736,20 @@ app.post("/api/detail/extract-style", async (req, res) => {
 
     const parts: any[] = [
       {
-        text: `你是一位顶尖电商设计系统架构师。请观察以下对标参考图（#Case）以及我方自有产品原图（#Prod），提炼出一份零废话、高信息密度的《整页统一视觉规范（6大物理锚点卡）》，用于在不传入竞品原图的前提下，跨屏锁死整套详情页的视觉一致性。
+        text: `你是一位顶尖电商设计系统架构师。请仔细观察以下上传的竞品对标参考图（#Case）以及我方自有产品原图（#Prod），提炼出一份零废话、高信息密度的《整页统一视觉规范（6大物理锚点卡）》，用于在不传入竞品原图的前提下，跨屏锁死整套详情页的色调、展台质感与版式一致性。
 
 核心提取铁律：
-1. 【主客体色相校准】：如果上传了我方自有产品图（#Prod）或产品资料（${productInfoText ? productInfoText.slice(0, 200) : "无"}），请提取竞品参考图的“明度对比、饱和度层次与光影结构”，但必须将【主色相】自动校准锚定到我方 #Prod 产品的主色调或壳面印花主题色上，严禁拿竞品的专属颜色硬套我方不同配色的产品！
-2. 【严格输出6大物理锚点（拒绝空洞形容词套话，只写具体材质、方位、色名与HEX色号，总字数控制在180~220字）】：
-   - 【① 60-30-10色板锚点】：背景主色(60%具体色名+HEX渐变) + 展台/卡片辅色(30%材质色+HEX) + 强调/角标色(10%高饱和色名+HEX)；
-   - 【② 展台与空间材质锚点】：全页唯一主承载展台材质与几何形态（如圆润磨砂潮玩底座/哑光微水泥圆柱台）+ 允许的同色系辅助装饰材质；
-   - 【③ 布光方位与色温阴影】：主光角度+色温K值+轮廓光位置+台面投影软硬与色调；
-   - 【④ 字体层级与色号锚点】：主标题字体性格与HEX色号 + 副标题/正文色号；
-   - 【⑤ UI容器与胶囊规范】：卖点卡片/底部数据胶囊的圆角大小、底色HEX、半透明毛玻璃或描边样式；
-   - 【⑥ 画布边距与三段网格】：左右安全边距占比 + 上(标题区)/中(产品主视觉区)/下(卖点卡片区)三段纵向比例。
-3. 语言笃定正向，绝对不要出现竞品品牌名、型号或“不要XX”等否定词。`,
+1. 【真实取色与主客体色相校准】：
+   - 请先准确读取竞品参考图（#Case）的真实背景主色调、材质肌理与明度氛围（例如：若竞品是暖米杏色/奶油香槟色柔光丝绸与磨砂展台，必须如实提取其暖米杏/奶油白/暖金棕高级色板，绝对禁止凭空臆造完全无关的死亡芭比粉或刺眼荧光色！）；
+   - 同时观察我方自有产品图（#Prod）的机身颜色与壳面印花色调，使整页 60-30-10 色板既还原对标参考图的高级光影明度关系，又与我方产品外观和谐相融。
+2. 【严格输出6大物理锚点（拒绝空洞套话，只写具体材质、方位、色名与HEX色号，总字数控制在180~220字）】：
+   - ① 60-30-10色板锚点：背景主色(60%具体色名+HEX渐变) + 展台/信息框辅色(30%材质色+HEX) + 强调色(10%色名+HEX)；
+   - ② 展台与空间材质锚点：全页统一主承载展台材质与几何形态（如温润奶油磨砂圆台/丝绸褶皱台面/哑光亚克力底座）+ 同色系微缩点缀元素；
+   - ③ 布光方位与色温阴影：主光角度+色温K值+轮廓光位置+台面柔和投影；
+   - ④ 字体层级与色号锚点：主标题字体风格与深色色号 + 副标题圆角贴纸底色与字色；
+   - ⑤ 底部信息卡片规范：底部卖点信息框的圆角矩形样式、浅奶油/半透明毛玻璃底色与细描边（注意：描述UI框时请统一称作“圆角矩形卖点卡片”或“圆角标签框”，严禁使用“胶囊”二字以免生图模型误画成医药胶囊颗粒！）；
+   - ⑥ 画面构图比例：左右安全留白占比 + 上部标题区(22%) / 中部产品展示核心区(54%) / 下部圆角卖点卡片区(24%)。
+3. 语言笃定正向，绝对不要出现竞品品牌名（如迪士尼/Disney/Mickey等）、不要出现“#Prod/#Case”编号，也不要写“不要XX”等否定词。`,
       },
     ];
 
@@ -4755,7 +4757,7 @@ app.post("/api/detail/extract-style", async (req, res) => {
       const resolved = await resolveReferenceInlineImage(prod, ossConfig);
       if (resolved) {
         parts.push({
-          text: `【我方自有产品原图 #${prod.code || "Prod"}（用于校准整页主色相与潮玩/商业调性）】`,
+          text: `【我方自有产品原图（用于校准产品机身与印花色调协调性）】`,
         });
         parts.push({ inlineData: resolved });
       }
@@ -4764,7 +4766,7 @@ app.post("/api/detail/extract-style", async (req, res) => {
     for (const c of caseImages.slice(0, 4)) {
       const resolved = await resolveReferenceInlineImage(c, ossConfig);
       if (resolved) {
-        parts.push({ text: `【对标版式与质感参考图 #${c.code || "Case"}】` });
+        parts.push({ text: `【对标视觉风格与色调参考图（请如实提取其背景色温、台面材质与版式层级）】` });
         parts.push({ inlineData: resolved });
       }
     }
@@ -4791,13 +4793,13 @@ app.post("/api/detail/extract-style", async (req, res) => {
       customHeaders,
       protocol,
       jsonHint:
-        '请严格输出 JSON 格式：{"unifiedVisualSpec": "【① 60-30-10色板锚点】...；【② 展台与空间材质锚点】...；【③ 布光方位与色温阴影】...；【④ 字体层级与色号锚点】...；【⑤ UI容器与胶囊规范】...；【⑥ 画布边距与三段网格】...", "dominantPalette": "主色调描述"}',
+        '请严格输出 JSON 格式：{"unifiedVisualSpec": "【① 60-30-10色板锚点】...；【② 展台与空间材质锚点】...；【③ 布光方位与色温阴影】...；【④ 字体层级与色号锚点】...；【⑤ 底部圆角信息卡片规范】...；【⑥ 画面三段式构图比例】...", "dominantPalette": "主色调描述"}',
     });
 
     const parsed = safeParseJson(response.text || "{}");
     const spec =
       (parsed.unifiedVisualSpec || "").trim() ||
-      "【① 60-30-10色板锚点】背景主色(60%)柔和奶白至浅暖米渐变(#FAF7F2→#F0EAE1)，展台/卡片辅色(30%)磨砂云朵白(#FFFFFF)，强调色(10%)琥珀暖棕(#4A3525)；【② 展台与空间材质锚点】圆润倒角哑光潮玩级磨砂几何展台，配同色系立体微缩装饰物；【③ 布光方位与色温阴影】左上方45° 5200K柔光箱主光配右侧清透轮廓光，台面呈柔和浅暖灰漫反射短阴影；【④ 字体层级与色号锚点】主标题现代圆体/粗黑体(#2C1E16)，副标题中灰棕(#6E5A4F)；【⑤ UI容器与胶囊规范】统一16px大圆角胶囊卡片，暖咖色或半透明磨砂白底配1px高光描边；【⑥ 画布边距与三段网格】左右留白10%，顶部20%标题区+中部55%产品主视觉+底部25%卖点胶囊区。";
+      "【① 60-30-10色板锚点】背景主色(60%)柔和奶白至浅暖米渐变(#FAF7F2→#F0EAE1)，展台与卡片辅色(30%)磨砂云朵白(#FFFFFF)，强调色(10%)琥珀暖棕(#4A3525)；【② 展台与空间材质锚点】圆润倒角哑光磨砂几何展台，配同色系立体微缩装饰物；【③ 布光方位与色温阴影】左上方45° 5200K柔光箱主光配右侧清透轮廓光，台面呈柔和浅暖灰漫反射短阴影；【④ 字体层级与色号锚点】主标题现代圆体粗黑字(#2C1E16)，副标题中灰棕(#6E5A4F)；【⑤ 底部圆角信息卡片规范】统一16px大圆角矩形信息卡片，浅暖米白半透明磨砂底配1px高光细描边；【⑥ 画面三段式构图比例】左右留白10%，上部20%标题留白区+中部55%产品核心展示区+下部25%圆角矩形卖点卡片区。";
 
     res.json({
       unifiedVisualSpec: spec,
@@ -4856,11 +4858,11 @@ app.post("/api/detail/plan-modules", async (req, res) => {
     }
 
     const parts: any[] = [];
-    for (const prod of (productImages || []).slice(0, 8)) {
+    for (const prod of (productImages || []).slice(0, 12)) {
       const resolved = await resolveReferenceInlineImage(prod, ossConfig);
       if (resolved) {
         parts.push({
-          text: `【我方自有产品实拍图 ID="${prod.id}" | 编号=#${prod.code || "Prod"} | 预设视角角色="${prod.prodAngleRole || "待视觉识别"}" | 标签="${prod.tag || prod.name}"】`,
+          text: `【我方自有产品实拍图 ID="${prod.id}" | 当前视角标注="${prod.prodAngleRole || "待视觉识别"}" | 文件名/标签="${prod.tag || prod.name}"】`,
         });
         parts.push({ inlineData: resolved });
       }
@@ -4874,43 +4876,43 @@ app.post("/api/detail/plan-modules", async (req, res) => {
         const boundIds = m.boundProductIds || m.referenceImageIds || [];
         const boundProdLabels = (productImages || [])
           .filter((p) => boundIds.length === 0 || boundIds.includes(p.id))
-          .map((p) => `#${p.code || "Prod"}(ID:${p.id}, ${p.tag || p.name})`)
+          .map((p) => `(ID:"${p.id}", 描述:${p.tag || p.name})`)
           .join("、");
-        return `第 ${idx + 1} 屏 (ID: "${m.id}") | 模块类型: ${m.moduleType} (${m.title}) | 当前绑定产品图: ${boundProdLabels || "默认待智能编排"} | 用户的本屏备注要求: "${m.userNote || "无"}" | 推荐构图骨架: ${skel}`;
+        return `第 ${idx + 1} 屏 (ID: "${m.id}") | 模块类型: ${m.moduleType} (${m.title}) | 当前候选产品图: ${boundProdLabels || "默认待智能编排"} | 用户的本屏备注要求: "${m.userNote || "无"}" | 推荐构图骨架: ${skel}`;
       })
       .join("\n");
 
-    const promptInstruction = `你是一位顶尖天猫/京东品牌详情页总导演。请先用视觉能力仔细识别上方每一张我方自有产品图（#Prod）的【真实拍摄视角/内容角色】（如：正面印花主视图、开盖漏耳机图、单只耳机佩戴/本体特写、局部细节/充电微距、多花色全家福合集、包装配件图）以及壳面上的【卡通印花图案主题】，再结合产品核心资料与《整页统一视觉规范》，为 ${modules.length} 个详情页分屏模块逐屏生成高转化率的【屏内文案】、【智能匹配的本屏产品图ID列表（boundProductIds）】与【高稳定性生图画面描述（visualPrompt）】。
+    const promptInstruction = `你是一位顶尖天猫/京东品牌详情页总导演。请先用视觉能力仔细识别上方每一张我方自有产品图（ID）的【真实拍摄视角/内容角色】（如：hero_front 正面主视图、open_case 开盖含双耳图、single_earbud 单只耳机特写图、detail_closeup 局部材质/充电微距图、multi_sku 多花色合集图、package_accessory 包装配件图）以及壳面上的【卡通印花图案主题】，再结合产品核心资料与《整页统一视觉规范》，输出每个产品图的视角识别结果 \`detectedProdRoles\`，并为 ${modules.length} 个详情页分屏模块逐屏生成高转化率的【3行结构化屏内文案（typographyPlan）】、【智能匹配的本屏产品图ID列表（boundProductIds）】、【全页统一色板的印花4维配方（printThemeConfig）】与【高稳定性生图画面描述（visualPrompt）】。
 
 【一、我方产品核心资料】：
-${productInfoText.trim() || "请直接根据上传的 #Prod 自有产品实拍图识别产品品类、外观特征、壳面卡通印花故事、材质细节与核心卖点。"}
+${productInfoText.trim() || "请直接根据上传的自有产品实拍图识别产品品类、外观特征、壳面卡通印花故事、材质细节与核心卖点。"}
 
-【二、整页统一视觉规范（全屏必须统一遵循）】：
+【二、整页统一视觉规范（全屏必须严格统一遵循同一套背景色板与UI卡片风格，严禁第1屏粉色、第2屏突然变成薄荷绿！）】：
 ${unifiedVisualSpec.trim() || "现代高质感商业摄影棚拍，极简几何展台，柔和立体布光，全页色温与主辅色调高度统一，现代无衬线字体清晰排版，四周保留8%安全留白。"}
 
 【三、待策划的分屏模块列表（共 ${modules.length} 屏）】：
 ${moduleListDesc}
 
-【四、逐屏输出硬性标准】：
-1. 原样返回每个模块的 \`id\` 和 \`screenNumber\`。
-2. \`boundProductIds\`（智能编排本屏最匹配的 1~4 张 #Prod 产品图 \`id\` 数组）：
-   - \`kv_hero\`（首屏KV）：优先组合「正面主视图 + 开盖双耳/单耳特写图」（1~2张），展现丰富主次层次；
-   - \`selling_point\`（核心卖点屏）：根据本屏卖点主题（如人体工学佩戴、音质声学、持久续航），优先匹配「单耳特写/细节图 + 正面主视图」，避免每屏都是单一死板角度；
-   - \`series_matrix\`（系列/多SKU展示屏）：必须勾选全部不同印花/颜色款式的 #Prod ID，用于同框矩阵陈列；
-   - \`package_contents\`（配件/包装清单屏）：优先匹配含包装盒/配件的 #Prod ID 及正面主视图；
-   - \`spec_table\` / \`after_sales\`：优先匹配最端正清晰的正面主视图 ID。
-3. \`copywriting\`：本屏核心主副标题摘要（格式如："主标题 / 副标题"，简练有力，直击痛点）。
-4. \`typographyPlan\`：本屏需要在画面内清晰渲染的完整中文文案清单（按模块类型定制）：
-   - 若是 \`kv_hero\` 或 \`selling_point\`：包含【主标题】、【副标题】、【底部2~3个核心卖点胶囊卡片文案】；
-   - 若是 \`spec_table\`（详细规格/参数表）：包含【主标题：产品规格参数】及 5~7 项结构化参数键值对；
-   - 若是 \`series_matrix\`（系列/多SKU展示）：包含【主标题】、【副标题】及各印花/款式名称标签；
-   - 若是 \`package_contents\`（配件/赠品图）：包含【主标题：包装清单】及明确的收货物品名称与数量清单（如：充电仓×1、左右耳机×1对、Type-C充电线×1、说明书×1）；
-   - 若是 \`usage_tips\`（使用建议/注意事项）：包含【主标题：使用指南与注意事项】及 3 条简明分步说明；
-   - 若是 \`after_sales\`（售后保障图）：包含【主标题：官方售后保障】及 4 项核心服务承诺。
-5. \`visualPrompt\`（140~220字纯正向高密度物理画面描述）：
-   - 必须明确指定画面中如何组合陈列本屏绑定的 \`#Prod\`（100%还原#Prod实拍图的外观造型、比例、配色与表面卡通印花图案，严禁变形）；
-   - 若产品带有卡通印花图案，请提取印花中的故事元素（如太空芝士鼠、星月美梦兔、森系露营刺猬等）转化为潮玩盲盒质感的展台底座与2~3个轻盈悬浮伴生符号，并让标题与底部胶囊配色同色系联动；
-   - 语言纯粹正向，严禁出现“不要XX”等否定词。`;
+【四、输出硬性标准（极其重要，直接决定生图质量）】：
+1. \`detectedProdRoles\`：对上方每一张产品图输出其真实 \`id\`、\`prodAngleRole\`（严格从 hero_front, open_case, single_earbud, detail_closeup, multi_sku, package_accessory 中选一）以及简短直观的中文角度描述 \`tag\`（如 "充电仓正面主视"、"开盖露双耳"、"双耳悬浮特写"、"充电仓底部接口"），方便用户在界面上一眼看清每张图是什么角度。
+2. \`boundProductIds\`（为每屏精准挑选 1~2 张最契合该屏主题的产品图 \`id\`，切勿盲目塞入过多同质角度）：
+   - \`kv_hero\`（首屏KV）：精选 1~2 张（如 1张正面主视图 + 1张开盖含双耳图），展现1个充电仓主体配1对耳机的完整首屏形象；
+   - \`selling_point\`（核心卖点屏）：若讲“声学音质/佩戴舒适”，优先选「单耳特写图 + 开盖图」（1~2张）；若讲“续航/闪充”，优先选「开盖含电量灯图 或 底部充电口图」（1~2张）；
+   - \`series_matrix\`（系列/多SKU展示屏）：勾选不同花色/款式的产品图 ID；
+   - \`package_contents\` / \`spec_table\` / \`after_sales\`：精选 1 张最端正清晰的正面主视图或包装图 ID。
+3. \`typographyPlan\`（⚠️必须严格采用【三行纯文本换行格式】，供前端自动填入「主标题 / 副标题 / 底部标签卡」三个独立输入框）：
+   - 第 1 行：仅写本屏主标题文字（⛔严禁带 "主标题：" 前缀，严禁把副标题用分号写在同一行！如：\`Ear'sir 芝士火箭鼠系列\`）；
+   - 第 2 行：仅写本屏副标题文字（⛔严禁带 "副标题：" 前缀！如：\`蓝牙6.0旗舰芯片 · 360°全景立体声效\`）；
+   - 第 3 行：底部圆角矩形卖点卡片文字，多个卖点之间用 \` | \` 分隔（⛔严禁带 "卖点：" 前缀，⛔绝对禁止加方括号 \`[\` \`]\`！例如写：\`ENC智能通话降噪 | 40ms超低游戏延迟 | 20H持久复合续航\`）。
+4. \`printThemeConfig\`（全页跨屏视觉一致性锁）：
+   - 所有分屏的 \`themePalette\`（60-30-10色板）和 \`themeUiStyle\` 必须与《整页统一视觉规范》及产品印花主题 **100%保持同一色系**（例如全页统一为暖米杏芝士黄系，或全页统一为柔光奶油粉系，绝对禁止第1屏粉色、第2屏变成绿色四叶草！）；
+   - \`themeStage\` 与 \`themeElements\` 可围绕同一印花母题（如太空芝士火箭鼠）结合本屏卖点微调（如声学屏用半透明声波环+芝士星球，续航屏用暖光能量底座+芝士块，注意描述UI卡片时统一写“圆角矩形信息卡”，严禁写“胶囊”以免模型画成药丸胶囊！）。
+5. \`visualPrompt\`（140~200字纯正向物理画面描述，直接喂给生图模型）：
+   - ⛔【三大绝对禁令】：
+     ① 绝对禁止在 \`visualPrompt\` 中出现 \`#Prod\`、\`#Prod-1\`、\`#Prod-2\`、\`#Case\` 等编号字样（否则生图模型会把 "#Prod-2" 当成文字直接印在展台上！）；
+     ② 绝对禁止在 \`visualPrompt\` 中使用“胶囊”二字（请一律改用“底部圆角矩形信息卡片”，否则生图模型会在空中画出红蓝药丸胶囊！）；
+     ③ 绝对禁止出现“潮玩舞台区”、“标题区”、“#EC4899”等排版术语或色号代码（色号只写在 printThemeConfig.themePalette 中，visualPrompt 中只用自然色彩词汇如“柔和奶油暖米色渐变背景”、“浅米色磨砂圆角卡片”）。
+   - 若本屏绑定了2张不同角度的同款产品图（如正面闭合仓+单耳特写），请在 \`visualPrompt\` 中明确描述为：“画面中央圆润展台上陈列1个印有卡通图案的充电仓主体，旁边自然依偎/悬浮1对耳机本体”，严禁描述成多个充电仓并排陈列！`;
 
     parts.push({ text: promptInstruction });
 
@@ -4920,6 +4922,18 @@ ${moduleListDesc}
         type: Type.OBJECT,
         properties: {
           unifiedVisualSpec: { type: Type.STRING },
+          detectedProdRoles: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                prodAngleRole: { type: Type.STRING },
+                tag: { type: Type.STRING },
+              },
+              required: ["id", "prodAngleRole"],
+            },
+          },
           plannedModules: {
             type: Type.ARRAY,
             items: {
@@ -4934,6 +4948,16 @@ ${moduleListDesc}
                 boundProductIds: {
                   type: Type.ARRAY,
                   items: { type: Type.STRING },
+                },
+                printThemeConfig: {
+                  type: Type.OBJECT,
+                  properties: {
+                    printStory: { type: Type.STRING },
+                    themePalette: { type: Type.STRING },
+                    themeStage: { type: Type.STRING },
+                    themeElements: { type: Type.STRING },
+                    themeUiStyle: { type: Type.STRING },
+                  },
                 },
               },
               required: [
@@ -4961,7 +4985,7 @@ ${moduleListDesc}
       customHeaders,
       protocol,
       jsonHint:
-        '请严格输出 JSON 对象：{"unifiedVisualSpec": "...", "plannedModules": [{"id": "...", "screenNumber": 1, "title": "...", "copywriting": "...", "typographyPlan": "...", "visualPrompt": "...", "boundProductIds": ["..."]}]}',
+        '请严格输出 JSON 对象：{"unifiedVisualSpec": "...", "detectedProdRoles": [{"id": "...", "prodAngleRole": "hero_front|open_case|single_earbud|detail_closeup|multi_sku|package_accessory", "tag": "角度简称"}], "plannedModules": [{"id": "...", "screenNumber": 1, "title": "...", "copywriting": "主标题\\n副标题\\n卖点1 | 卖点2 | 卖点3", "typographyPlan": "主标题\\n副标题\\n卖点1 | 卖点2 | 卖点3", "visualPrompt": "...", "boundProductIds": ["..."], "printThemeConfig": {"printStory": "...", "themePalette": "...", "themeStage": "...", "themeElements": "...", "themeUiStyle": "..."}}]}',
     });
 
     const parsed = safeParseJson(response.text || "{}");
@@ -4969,6 +4993,98 @@ ${moduleListDesc}
       ? parsed.plannedModules
       : [];
     const validProdIdSet = new Set((productImages || []).map((p: any) => p.id));
+    const allowedProdRoles = new Set([
+      "hero_front",
+      "open_case",
+      "single_earbud",
+      "detail_closeup",
+      "multi_sku",
+      "package_accessory",
+    ]);
+
+    const detectedProdRoles = Array.isArray(parsed.detectedProdRoles)
+      ? parsed.detectedProdRoles
+          .map((item: any) => {
+            const canonicalId =
+              resolveCanonicalRefId(item?.id, productImages) || item?.id;
+            if (!canonicalId || !validProdIdSet.has(canonicalId)) return null;
+            const role =
+              typeof item?.prodAngleRole === "string" &&
+              allowedProdRoles.has(item.prodAngleRole.trim())
+                ? item.prodAngleRole.trim()
+                : "hero_front";
+            return {
+              id: canonicalId,
+              prodAngleRole: role,
+              tag: item?.tag ? String(item.tag).trim() : undefined,
+            };
+          })
+          .filter(Boolean)
+      : [];
+
+    // Helper to normalize typographyPlan into clean 3-line format without prefixes or [brackets]
+    const normalizeThreeLineCopy = (rawTypo: string, rawCopy: string, fallbackTitle: string): string => {
+      const source = (rawTypo || rawCopy || "").trim();
+      if (!source) {
+        return `${fallbackTitle}\n官方正品 · 匠心品质甄选`;
+      }
+      // Split on newlines OR semicolons when labeled prefixes like 主标题/副标题/卖点 are present
+      let segments = source
+        .replace(/；\s*(?=(?:主标题|副标题|底部|卖点|胶囊|参数|卡片))/g, "\n")
+        .replace(/;\s*(?=(?:主标题|副标题|底部|卖点|胶囊|参数|卡片))/g, "\n")
+        .split(/\r?\n/)
+        .map((s) =>
+          s
+            .replace(/^\s*(?:【?\s*(?:主标题|大标题|标题|副标题|次标题|底部卖点(?:胶囊|卡片)?|卖点(?:胶囊|卡片|标签)?|底部(?:胶囊|卡片|参数)|胶囊(?:文案|卡片)?|参数(?:清单)?)\s*】?\s*[:：]\s*)/i, "")
+            .replace(/\[([^\]]+)\]/g, "$1")
+            .trim()
+        )
+        .filter(Boolean);
+
+      if (segments.length === 1 && /[；;]/.test(segments[0])) {
+        segments = segments[0]
+          .split(/[；;]/)
+          .map((s) =>
+            s
+              .replace(/^\s*(?:主标题|副标题|卖点|胶囊|参数)\s*[:：]\s*/i, "")
+              .replace(/\[([^\]]+)\]/g, "$1")
+              .trim()
+          )
+          .filter(Boolean);
+      }
+
+      const headline = segments[0] || fallbackTitle;
+      const subheadline = segments[1] || "";
+      const capsules = segments
+        .slice(2)
+        .join(" | ")
+        .replace(/\[([^\]]+)\]/g, "$1")
+        .trim();
+
+      return [headline, subheadline, capsules].filter(Boolean).join("\n");
+    };
+
+    // Sanitize visualPrompt so #Prod-X, #Case-X, or literal "胶囊" never leak into image generation
+    const sanitizeVisualPromptText = (rawPrompt: string): string => {
+      return (rawPrompt || "")
+        .replace(/#(?:Prod|Case)(?:-\d+)?\b/gi, "我方产品")
+        .replace(/\[([^\]]+)\]/g, "$1")
+        .replace(/卖点胶囊|数据胶囊|圆角胶囊|胶囊卡片|胶囊卡|胶囊框|胶囊区|底部胶囊/g, "圆角矩形信息卡")
+        .replace(/胶囊/g, "圆角信息框")
+        .replace(/潮玩舞台区|产品主视觉区|标题区/g, "展示区域")
+        .trim();
+    };
+
+    // Lock the first module's themePalette across all modules so the detail page never jumps colors between screens
+    const masterPalette =
+      returnedList.find((r: any) => r?.printThemeConfig?.themePalette)
+        ?.printThemeConfig?.themePalette || "";
+    const masterStory =
+      returnedList.find((r: any) => r?.printThemeConfig?.printStory)
+        ?.printThemeConfig?.printStory || "";
+    const masterUiStyle =
+      returnedList.find((r: any) => r?.printThemeConfig?.themeUiStyle)
+        ?.printThemeConfig?.themeUiStyle || "";
 
     const finalModules = modules.map((m, idx) => {
       const matched =
@@ -4995,28 +5111,53 @@ ${moduleListDesc}
         m.moduleType === "series_matrix"
           ? (productImages || []).map((p: any) => p.id)
           : m.boundProductIds && m.boundProductIds.length > 0
-            ? m.boundProductIds
+            ? m.boundProductIds.slice(0, 2)
             : (productImages || []).slice(0, 1).map((p: any) => p.id);
+
+      const cleanThreeLine = normalizeThreeLineCopy(
+        matched.typographyPlan,
+        matched.copywriting,
+        matched.title || m.title
+      );
+      const rawPrompt =
+        matched.visualPrompt ||
+        `${skel} 遵循整页统一视觉规范：${unifiedVisualSpec || "现代极简商业摄影棚拍，柔和立体布光"}。${m.userNote ? `补充要求：${m.userNote}` : ""}`;
+
+      const rawTheme = matched.printThemeConfig;
+      const unifiedTheme = rawTheme
+        ? {
+            enabled: true,
+            printStory: rawTheme.printStory || masterStory || `${matched.title || m.title} · 主题联动`,
+            themePalette: masterPalette || rawTheme.themePalette || "",
+            themeStage: sanitizeVisualPromptText(rawTheme.themeStage || ""),
+            themeElements: sanitizeVisualPromptText(rawTheme.themeElements || ""),
+            themeUiStyle: sanitizeVisualPromptText(
+              masterUiStyle || rawTheme.themeUiStyle || "同色系浅奶油色圆角矩形信息卡，严禁生硬黑棕色块"
+            ),
+          }
+        : undefined;
 
       return {
         id: m.id,
         screenNumber: idx + 1,
         title: matched.title || m.title,
-        copywriting:
-          matched.copywriting || `${m.title} · 匠心品质甄选`,
-        typographyPlan:
-          matched.typographyPlan ||
-          `主标题：${m.title}\n副标题：官方正品 · 匠心细节品质`,
-        visualPrompt:
-          matched.visualPrompt ||
-          `${skel} 遵循整页统一视觉规范：${unifiedVisualSpec || "现代极简商业摄影棚拍，柔和立体布光"}。${m.userNote ? `补充要求：${m.userNote}` : ""}`,
-        boundProductIds: aiBoundIds.length > 0 ? aiBoundIds : fallbackIds,
+        copywriting: cleanThreeLine,
+        typographyPlan: cleanThreeLine,
+        visualPrompt: sanitizeVisualPromptText(rawPrompt),
+        boundProductIds:
+          m.moduleType === "series_matrix"
+            ? aiBoundIds.length > 0
+              ? aiBoundIds
+              : fallbackIds
+            : (aiBoundIds.length > 0 ? aiBoundIds : fallbackIds).slice(0, 2),
+        printThemeConfig: unifiedTheme,
       };
     });
 
     res.json({
       unifiedVisualSpec:
         (parsed.unifiedVisualSpec || unifiedVisualSpec || "").trim(),
+      detectedProdRoles,
       plannedModules: finalModules,
     });
   } catch (err: any) {
@@ -5466,6 +5607,31 @@ app.post("/api/image/generate", async (req, res) => {
       accessory: "包装盒与配件清单图",
     };
 
+    // Helper to strip internal asset codes (#Prod-2, #Case-1), square brackets [ ], and replace "胶囊" (which causes image models to draw literal 3D medicine pills!)
+    const sanitizePromptForRender = (text?: string): string => {
+      if (!text) return "";
+      return text
+        .replace(/#(?:Prod|Case)(?:-\d+)?\b/gi, "我方商品")
+        .replace(/\[([^\]]+)\]/g, "$1")
+        .replace(
+          /卖点胶囊|数据胶囊|圆角胶囊|胶囊卡片|胶囊卡|胶囊框|胶囊底栏|胶囊区|底部胶囊|贴纸胶囊/g,
+          "圆角矩形卖点卡片"
+        )
+        .replace(/胶囊/g, "圆角标签框")
+        .replace(/潮玩舞台区/g, "中央展台区域")
+        .replace(/标题区/g, "顶部标题区域")
+        .trim();
+    };
+
+    const sanitizeCopyForRender = (text?: string): string => {
+      if (!text) return "";
+      return text
+        .replace(/\[([^\]]+)\]/g, "$1")
+        .replace(/#(?:Prod|Case)(?:-\d+)?\b/gi, "")
+        .replace(/^\s*(?:主标题|副标题|底部卖点|卖点|胶囊|参数)\s*[:：]\s*/gm, "")
+        .trim();
+    };
+
     const buildPrint4dDirective = (cfg?: {
       enabled?: boolean;
       printStory?: string;
@@ -5476,16 +5642,16 @@ app.post("/api/image/generate", async (req, res) => {
     }) => {
       if (!cfg || cfg.enabled === false) return "";
       const lines = [
-        cfg.printStory ? `- 印花世界观母题：${cfg.printStory}` : "",
-        cfg.themePalette ? `- ① 联动主题色板（60-30-10）：${cfg.themePalette}` : "",
+        cfg.printStory ? `- 印花世界观母题：${sanitizePromptForRender(cfg.printStory)}` : "",
+        cfg.themePalette ? `- ① 联动主题色板（60-30-10）：${sanitizePromptForRender(cfg.themePalette)}` : "",
         cfg.themeStage
-          ? `- ② 联动潮玩底座：${cfg.themeStage}（采用泡泡玛特/盲盒手办级细腻圆润哑光质感，严禁生硬廉价塑料感）`
+          ? `- ② 联动主题底座：${sanitizePromptForRender(cfg.themeStage)}（采用细腻圆润哑光质感，严禁生硬廉价塑料感）`
           : "",
         cfg.themeElements
-          ? `- ③ 印花伴生悬浮元素：${cfg.themeElements}（从产品壳面插画直接延展出的伴生符号，按前景微距虚化+中景互动排布，灵动自然）`
+          ? `- ③ 印花伴生悬浮小元素：${sanitizePromptForRender(cfg.themeElements)}（仅限从产品壳面插画延展出的2~3个微缩主题符号，严禁在空中画医药胶囊药丸！）`
           : "",
         cfg.themeUiStyle
-          ? `- ④ 标题与底部卖点胶囊配色：${cfg.themeUiStyle}（标题字色与底部数据胶囊框必须随本款印花主题色同步联动，严禁使用死板千篇一律的黑棕色底框！）`
+          ? `- ④ 标题与底部圆角矩形信息卡配色：${sanitizePromptForRender(cfg.themeUiStyle)}（标题字色与底部圆角矩形卖点框必须随本款主题色同步联动，严禁使用死板黑棕色底框！）`
           : "",
       ].filter(Boolean);
       return lines.length > 0
@@ -5542,14 +5708,15 @@ app.post("/api/image/generate", async (req, res) => {
     if (isReplicaRender) {
       // ==================== PIPELINE A: MAIN IMAGE / SKU REPLICA STUDIO (Multi-Angle #Prod + 4D Print Theme Linkage) ====================
       // 1. Attach All Bound Own Product Image(s) (#Prod, up to 5 angles/SKUs)
-      for (const ref of prodRefs.slice(0, 5)) {
+      for (let i = 0; i < Math.min(5, prodRefs.length); i++) {
+        const ref = prodRefs[i];
         const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
         if (sanitized) {
           const roleDesc = ref.prodAngleRole
             ? roleLabelMap[ref.prodAngleRole] || ref.prodAngleRole
             : "产品实拍图";
           parts.push({
-            text: `【图A · 我方自有产品原图 #${ref.code || "Prod"}（视角角色：${roleDesc} ｜ 名称：${ref.tag || ref.name}）】：必须 100% 严格还原此图中的商品工业造型、轮廓比例、材质光泽与壳面卡通印花图案细节，绝对禁止商品变形或篡改图案！`,
+            text: `【图A-${i + 1} · 我方自有商品实拍原图（视角角色：${roleDesc}）】：必须 100% 严格还原此图中的商品工业造型、轮廓比例、材质光泽与壳面卡通印花图案细节，绝对禁止商品变形或篡改图案！（注意：切勿在画面中印出任何图片编号或文件名）`,
           });
           parts.push({
             inlineData: {
@@ -5570,7 +5737,7 @@ app.post("/api/image/generate", async (req, res) => {
       // Otherwise attach Target Reference Image (#Case).
       if (resolvedLockedResult) {
         parts.push({
-          text: `【🔒 当前已确认满意成图基准（局部微调锁死构图锚点）】：这是一张用户已经基本满意的当前成图！请 95% 严格保持此图的【整体构图布局、镜头透视、产品摆放位置、展台光影与环境色彩】不变，仅针对下方指定的【局部微调修改要求】或最新文案进行定点精修重绘，同时确保商品外观与【图A · 我方自有产品原图】100%一致！`,
+          text: `【🔒 当前已确认满意成图基准（局部微调锁死构图锚点）】：这是一张用户已经基本满意的当前成图！请 95% 严格保持此图的【整体构图布局、镜头透视、产品摆放位置、展台光影与环境色彩】不变，仅针对下方指定的【局部微调修改要求】或最新文案进行定点精修重绘，同时确保商品外观与【图A · 我方自有商品实拍原图】100%一致！`,
         });
         parts.push({
           inlineData: {
@@ -5583,8 +5750,8 @@ app.post("/api/image/generate", async (req, res) => {
           const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
           if (sanitized) {
             const caseHeader = isHighReplica
-              ? `【图B · 目标复刻参考图 #${ref.code || "Case"}（高度复刻版式骨架）】：请严格参照此参考图的【版面分区结构（如首焦KV、Bento多卖点宫格、1拖2子卡片、续航功能场景或多色SKU矩阵）、镜头透视角度与文字排版位置】，将原图中的竞品商品 100% 替换为上方【图A · 我方自有产品原图】！`
-              : `【图B · 风格参考图 #${ref.code || "Case"}（参考风格模式）】：请参考此图的【整体视觉美学气质、布光氛围与版面信息结构】，围绕上方【图A · 我方自有产品原图】重构契合的场景细节与色彩搭配！`;
+              ? `【图B · 目标复刻参考图（高度复刻版式骨架）】：请严格参照此参考图的【版面分区结构（如首焦KV、Bento多卖点宫格、1拖2子卡片、续航功能场景或多色SKU矩阵）、镜头透视角度与文字排版位置】，将原图中的竞品商品 100% 替换为上方【图A · 我方自有商品实拍原图】！`
+              : `【图B · 风格参考图（参考风格模式）】：请参考此图的【整体视觉美学气质、布光氛围与版面信息结构】，围绕上方【图A · 我方自有商品实拍原图】重构契合的场景细节与色彩搭配！`;
             parts.push({ text: caseHeader });
             parts.push({
               inlineData: {
@@ -5608,16 +5775,12 @@ app.post("/api/image/generate", async (req, res) => {
             : true;
       const effectiveLinkageMode =
         rawStyleLinkageMode || (consistentStyle ? "print_4d" : "lock_scene");
-      const singleRequirement = (
-        rawPerRefRequirement ||
-        rawSingleRequirement ||
-        ""
-      ).trim();
-      const unifiedRequirement = (
-        rawGlobalRequirement ||
-        rawUnifiedRequirement ||
-        ""
-      ).trim();
+      const singleRequirement = sanitizePromptForRender(
+        rawPerRefRequirement || rawSingleRequirement || ""
+      );
+      const unifiedRequirement = sanitizePromptForRender(
+        rawGlobalRequirement || rawUnifiedRequirement || ""
+      );
 
       const categoryMap: Record<string, string> = {
         ecommerce_product: "高转化电商商品主图/SKU图，商品主体锐利突出，商业棚拍质感",
@@ -5634,13 +5797,13 @@ app.post("/api/image/generate", async (req, res) => {
 
       let fidelityBlock = "";
       if (resolvedLockedResult) {
-        fidelityBlock = `【🔒 锁当前成图局部微调模式（最高优先级）】\n1. 构图与环境锁定：严格锁定上方【当前已确认满意成图基准】的相机机位、产品角度、展台底座、背景色调与整体版面结构，严禁推倒重来改变大构图！\n2. 定点微调执行：${cleanRefineInstruction ? `严格执行本次局部修改指令：「${cleanRefineInstruction}」；` : "保持原构图，按最新文案与细节描述进行局部优化；"}\n3. 商品真实还原：画面中的商品主体必须100%严格保持【图A · 我方自有产品原图】的工业造型、几何比例与壳面印花细节，严禁商品拉伸变形！`;
+        fidelityBlock = `【🔒 锁当前成图局部微调模式（最高优先级）】\n1. 构图与环境锁定：严格锁定上方【当前已确认满意成图基准】的相机机位、产品角度、展台底座、背景色调与整体版面结构，严禁推倒重来改变大构图！\n2. 定点微调执行：${cleanRefineInstruction ? `严格执行本次局部修改指令：「${cleanRefineInstruction}」；` : "保持原构图，按最新文案与细节描述进行局部优化；"}\n3. 商品真实还原：画面中的商品主体必须100%严格保持【图A · 我方自有商品实拍原图】的工业造型、几何比例与壳面印花细节，严禁商品拉伸变形！`;
       } else if (hasProd && hasCase) {
         fidelityBlock = isHighReplica
-          ? `【复刻程度：高度复刻（多角度产品组合 + 版式锁定）】\n1. 构图与版式锁定：严格继承【图B · 参考图】的版面分区（包括顶部标题区、中部主视觉区、以及底部的Bento卖点小卡片或数据胶囊结构）。\n2. 多角度产品精准替换：将画面中的主商品及子卡片中的商品视角，100%精准替换为上方提供的【图A · 我方自有产品原图】（共提供 ${prodRefs.length} 张角度/款式图），严格还原图A的工业轮廓、真实几何比例、充电仓与耳机细节以及壳面卡通印花图案。\n3. 【核心抗拉伸防变形原则】：无论当前输出宽高比（${effectiveRatio}）为何，绝对禁止为了填充画布而对商品本身进行垂直拉伸或横向挤压变形！必须维持商品自身的真实几何长宽比，通过背景、展台与呼吸留白延展来适应画布！\n4. 【禁止竞品元素污染】：产品主体及其所有配件、Logo、壳面印花必须100%来源于【图A】，严禁混入【图B】中竞品商品的品牌Logo或无关造型特征！`
-          : `【复刻程度：参考风格（美学重构）】\n1. 风格借鉴与美学延展：提取【图B · 参考图】的整体视觉调性、光影氛围与排版层次规律。\n2. 场景与构图重塑：围绕【图A · 我方自有产品原图】重新设计契合的场景道具与背景，允许富有创意的美学构图。\n3. 【核心抗拉伸防变形原则】：100%严格还原图A产品的真实物理轮廓、工业几何比例与表面印花细节，绝对禁止任何拉伸或压扁变形！`;
+          ? `【复刻程度：高度复刻（多角度产品组合 + 版式锁定）】\n1. 构图与版式锁定：严格继承【图B · 参考图】的版面分区（包括顶部标题区、中部主视觉区、以及底部的Bento卖点小卡片或圆角矩形卖点卡片结构）。\n2. 多角度产品精准替换：将画面中的主商品及子卡片中的商品视角，100%精准替换为上方提供的【图A · 我方自有商品实拍原图】，严格还原图A的工业轮廓、真实几何比例、充电仓与耳机细节以及壳面卡通印花图案。\n3. 【核心抗拉伸防变形原则】：无论当前输出宽高比（${effectiveRatio}）为何，绝对禁止为了填充画布而对商品本身进行垂直拉伸或横向挤压变形！必须维持商品自身的真实几何长宽比，通过背景、展台与呼吸留白延展来适应画布！\n4. 【禁止竞品元素与编号文字污染】：产品主体及其所有配件、Logo、壳面印花必须100%来源于【图A】，严禁混入【图B】中竞品商品的品牌Logo，且画面中绝对禁止印出任何图片编号（如#Prod-1）、色号代码（如#EC4899）或方括号符号！`
+          : `【复刻程度：参考风格（美学重构）】\n1. 风格借鉴与美学延展：提取【图B · 参考图】的整体视觉调性、光影氛围与排版层次规律。\n2. 场景与构图重塑：围绕【图A · 我方自有商品实拍原图】重新设计契合的场景道具与背景，允许富有创意的美学构图。\n3. 【核心抗拉伸防变形原则】：100%严格还原图A产品的真实物理轮廓、工业几何比例与表面印花细节，绝对禁止任何拉伸或压扁变形！`;
       } else if (hasProd && !hasCase) {
-        fidelityBlock = `【电商商品高清商业摄影】\n1. 核心主体：画面以【图A · 我方自有产品原图】为绝对核心，100%严格还原其外观造型、工业细节与壳面印花质感。\n2. 【核心抗拉伸防变形原则】：严格保持商品原有的几何物理比例，严禁纵向拉伸或横向压扁商品。`;
+        fidelityBlock = `【电商商品高清商业摄影】\n1. 核心主体：画面以【图A · 我方自有商品实拍原图】为绝对核心，100%严格还原其外观造型、工业细节与壳面印花质感。\n2. 【核心抗拉伸防变形原则】：严格保持商品原有的几何物理比例，严禁纵向拉伸或横向压扁商品。`;
       } else if (!hasProd && hasCase) {
         fidelityBlock = `【创意参考图商业复刻】\n严格参考【图B · 参考图】的构图透视、空间布景、光影层级与版面信息结构，生成高质感电商商业主图。`;
       } else {
@@ -5652,25 +5815,25 @@ app.post("/api/image/generate", async (req, res) => {
       if (effectiveLinkageMode === "print_4d") {
         consistencyBlock =
           print4dBlock ||
-          `【🟣 印花主题4维深度联动（激活）】：请深入识别【图A · 我方自有产品原图】壳面上的卡通插画/印花主题（或机身主色调），将画面的：①背景渐变色温、②潮玩盲盒感圆润磨砂底座、③从印花图案提取的2~3个悬浮伴生小符号、④主副标题字色与底部卖点胶囊框配色，全部随图A的印花主题深度联动变化，营造浑然一体的主题世界观！`;
+          `【🟣 印花主题4维深度联动（激活）】：请深入识别【图A · 我方自有商品实拍原图】壳面上的卡通插画/印花主题（或机身主色调），将画面的：①背景渐变色温、②潮玩盲盒感圆润磨砂底座、③从印花图案提取的2~3个悬浮伴生小符号、④主副标题字色与底部圆角矩形卖点卡片配色，全部随图A的印花主题深度联动变化，营造浑然一体的主题世界观！`;
       } else if (effectiveLinkageMode === "color_sync") {
         consistencyBlock =
           print4dBlock ||
-          `【🔵 同色系顺应（激活）】：请自动提取【图A · 我方自有产品原图】的主色调，将画面中的背景渐变色、氛围光效、周边呼应道具以及标题/胶囊颜色，同步协调为与【图A】高度和谐的同色系配色！`;
+          `【🔵 同色系顺应（激活）】：请自动提取【图A · 我方自有商品实拍原图】的主色调，将画面中的背景渐变色、氛围光效、周边呼应道具以及标题/底部圆角卡片颜色，同步协调为与【图A】高度和谐的同色系配色！`;
       } else {
         consistencyBlock = `【⚪ 锁死原场景策略】：保持【图B · 参考图】原有的环境光影与背景色彩氛围，仅精准替换商品主体与对应文案。`;
       }
 
       const effectiveLang =
         textMode === "without_text" ? "none" : replicaLanguage || "zh";
-      const copyText = (typographyPlan || copywriting || "").trim();
+      const copyText = sanitizeCopyForRender(typographyPlan || copywriting || "");
 
       const languageBlock =
         effectiveLang === "none"
           ? `【文字渲染设置：无文字纯底图】：画面中严禁渲染任何文字、字母或标语，原参考图的文字区域请保留干净通透的背景留白。`
           : effectiveLang === "en"
-            ? `【文字渲染设置：英文 (English)】：画面中的标题、副标题与底部卖点胶囊请使用清晰、现代的商业英文（English）字体渲染${copyText ? `（指定渲染文案：${copyText}）` : "（参照图B的文案排版位置与语义，适配我方产品）"}。`
-            : `【文字渲染设置：简体中文】：画面中的标题、副标题与底部卖点胶囊请使用清晰、高级的现代商业简体中文字体渲染${copyText ? `（指定渲染文案：${copyText}）` : "（参照图B的排版位置，适配我方产品卖点）"}。`;
+            ? `【文字渲染设置：英文 (English)】：画面中的标题、副标题与底部圆角卖点卡片请使用清晰、现代的商业英文（English）字体渲染${copyText ? `（指定渲染文案：\n${copyText}\n注意：仅渲染上述纯净文案，严禁渲染方括号[]、编号#Prod或色号代码！）` : "（参照图B的文案排版位置与语义，适配我方产品）"}。`
+            : `【文字渲染设置：简体中文】：画面中的标题、副标题与底部圆角卖点卡片请使用清晰、高级的现代商业简体中文字体渲染${copyText ? `（指定渲染文案：\n${copyText}\n注意：仅渲染上述纯净文案，严禁渲染方括号[]、编号#Prod或色号代码！）` : "（参照图B的排版位置，适配我方产品卖点）"}。`;
 
       const userReqLines = [
         cleanRefineInstruction
@@ -5691,7 +5854,7 @@ app.post("/api/image/generate", async (req, res) => {
         userReqLines.length > 0
           ? `【用户指定复刻要求】：\n${userReqLines.join("\n")}`
           : "",
-        `【画面构图与细节指令】：\n${prompt.trim()}`,
+        `【画面构图与细节指令】：\n${sanitizePromptForRender(prompt)}`,
         languageBlock,
       ]
         .filter(Boolean)
@@ -5700,14 +5863,22 @@ app.post("/api/image/generate", async (req, res) => {
     } else {
       // ==================== PIPELINE B: MODULAR DETAIL PAGE STUDIO (Pure Product + 6-Anchor Spec + Optional 1:1->3:4/9:16 Vertical Reframing + Optional Lock-Result Refinement) ====================
       // 1. Attach Own Product Images (#Prod) — Sole Authority for Product Identity!
-      for (const ref of prodRefs.slice(0, 5)) {
+      // IMPORTANT: Never put "#Prod-2" or "#Prod-4" into the text label sent to the image model, otherwise the image model prints "#Prod-2" onto the podium!
+      const isMultiSkuMatrixScreen = moduleType === "series_matrix";
+      const maxProdToAttach = isMultiSkuMatrixScreen ? 5 : 2;
+      const effectiveDetailProdRefs = prodRefs.slice(0, maxProdToAttach);
+
+      for (let i = 0; i < effectiveDetailProdRefs.length; i++) {
+        const ref = effectiveDetailProdRefs[i];
         const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
         if (sanitized) {
           const roleDesc = ref.prodAngleRole
             ? roleLabelMap[ref.prodAngleRole] || ref.prodAngleRole
             : "产品实拍图";
           parts.push({
-            text: `【我方自有产品实拍图（产品外观唯一权威源）#${ref.code || "Prod"}（视角角色：${roleDesc} ｜ 名称：${ref.tag || ref.name}）】：请 100% 严格还原此商品的工业外观、几何比例、配色材质与壳面印花细节，严禁商品变形！`,
+            text: isMultiSkuMatrixScreen
+              ? `【我方自有商品实拍原图（款式 ${i + 1} · ${roleDesc}）】：请 100% 严格还原此商品的真实工业外观、几何比例与壳面卡通印花细节！（严禁在画面中印出任何编号文字）`
+              : `【我方自有商品实拍原图（同款产品的第 ${i + 1} 视角参考：${roleDesc}）】：这与本屏其他参考图是【同一款商品】的不同拍摄角度（如充电仓与耳机本体），请结合这些角度 100% 严格还原商品的工业外形、比例与表面卡通印花图案，在展台上仅展示 1 套商品主体（如 1 个充电仓 + 1 对耳机），绝对禁止把多张角度参考图画成多个重复的充电仓并排摆在展台上，更严禁在画面上印出任何图片编号或说明标签！`,
           });
           parts.push({
             inlineData: {
@@ -5723,7 +5894,7 @@ app.post("/api/image/generate", async (req, res) => {
       let hasVerticalReframeSource = false;
       if (resolvedLockedResult) {
         parts.push({
-          text: `【🔒 当前分屏已确认满意成图基准（局部微调锁死构图锚点）】：这是一张用户对整体构图已经满意的当前分屏成图。请 95% 严格锁定此图的【整体构图布局、产品位置角度、展台道具、光影色调与版面结构】不变，仅按下方【🔒 本屏锁图局部微调指令】或最新文案进行定点精修，同时确保商品外观与上方我方 #Prod 产品实拍图 100% 一致！`,
+          text: `【🔒 当前分屏已确认满意成图基准（局部微调锁死构图锚点）】：这是一张用户对整体构图已经满意的当前分屏成图。请 95% 严格锁定此图的【整体构图布局、产品位置角度、展台道具、光影色调与版面结构】不变，仅按下方【🔒 本屏锁图局部微调指令】或最新文案进行定点精修，同时确保商品外观与上方我方商品实拍图 100% 一致！`,
         });
         parts.push({
           inlineData: {
@@ -5746,7 +5917,7 @@ app.post("/api/image/generate", async (req, res) => {
         if (resolvedSource) {
           hasVerticalReframeSource = true;
           parts.push({
-            text: `【同源1:1主图基准成图（纵向画幅重构锚点）】：这是一张已经确认满意的 1:1 主图成图。请保持此图中的【我方产品外观、印花主题展台底座、悬浮伴生小元素、光影色调与卡片配色】100%一致，将画布纵向舒展重构为 ${effectiveRatio} 竖屏详情页构图（向上舒展顶部标题呼吸区、向下舒展底部卖点胶囊/子卡片区），绝对禁止将中间的商品本体纵向拉伸变形！`,
+            text: `【同源1:1主图基准成图（纵向画幅重构锚点）】：这是一张已经确认满意的 1:1 主图成图。请保持此图中的【我方产品外观、印花主题展台底座、悬浮伴生小元素、光影色调与卡片配色】100%一致，将画布纵向舒展重构为 ${effectiveRatio} 竖屏详情页构图（向上舒展顶部标题呼吸区、向下舒展底部圆角矩形卖点卡片区），绝对禁止将中间的商品本体纵向拉伸变形！`,
           });
           parts.push({
             inlineData: {
@@ -5763,7 +5934,7 @@ app.post("/api/image/generate", async (req, res) => {
           const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
           if (sanitized) {
             parts.push({
-              text: `【版式锁底参考图 #${ref.code || "Case"}】：保持此图的背景展台与版式结构，将产品100%替换为上方我方 #Prod 产品，严禁保留参考图中的竞品Logo或原文字。`,
+              text: `【版式锁底参考图】：保持此图的背景展台与版式结构，将产品100%替换为上方我方商品实拍原图，严禁保留参考图中的竞品Logo或原文字。`,
             });
             parts.push({
               inlineData: {
@@ -5778,7 +5949,7 @@ app.post("/api/image/generate", async (req, res) => {
           const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
           if (sanitized) {
             parts.push({
-              text: `【全页共用美学风格参考图 #${ref.code || "Case"}（仅参考光影色调与材质氛围）】：请仅提取此图的布光质感、色温调性与商业美学氛围，商品主体必须100%采用上方我方 #Prod 产品实拍图，严禁复制此参考图中的竞品外观或原图文字！`,
+              text: `【全页共用美学风格参考图（仅参考光影色调与材质氛围）】：请仅提取此图的布光质感、色温调性与商业美学氛围，商品主体必须100%采用上方我方商品实拍图，严禁复制此参考图中的竞品外观或原图文字！`,
             });
             parts.push({
               inlineData: {
@@ -5790,24 +5961,25 @@ app.post("/api/image/generate", async (req, res) => {
         }
       }
 
-      const moduleSkeleton =
+      const rawModuleSkeleton =
         (moduleType && SERVER_MODULE_SKELETONS[moduleType]) || "";
+      const moduleSkeleton = sanitizePromptForRender(rawModuleSkeleton);
       const specBlock = unifiedVisualSpec?.trim()
-        ? `【整页统一视觉规范（6大跨屏物理锚点）】：\n${unifiedVisualSpec.trim()}`
+        ? `【整页统一视觉规范（跨屏色彩与材质铁律）】：\n${sanitizePromptForRender(unifiedVisualSpec.trim())}`
         : `【整页统一视觉规范】：现代高质感商业摄影棚拍，极简几何展台，柔和立体主光配轮廓高光，全页色温与主辅色调高度统一，四周保留至少8%呼吸留白。`;
 
       const print4dDetailBlock = buildPrint4dDirective(printThemeConfig);
 
       const lockedRefineDirective = resolvedLockedResult
-        ? `【🔒 本屏锁当前成图局部微调硬性法则（最高优先级）】：\n1. 严格锁定上方【当前分屏已确认满意成图基准】的相机视角、商品摆位、背景展台、光影氛围与整体排版结构，严禁改变大构图；\n2. ${cleanRefineInstruction ? `重点执行以下局部修改指令：「${cleanRefineInstruction}」；` : "保持当前构图，按下方最新屏内文案与细节描述进行局部精修；"}\n3. 商品主体必须与我方 #Prod 原图 100% 一致，严禁几何拉伸变形！`
+        ? `【🔒 本屏锁当前成图局部微调硬性法则（最高优先级）】：\n1. 严格锁定上方【当前分屏已确认满意成图基准】的相机视角、商品摆位、背景展台、光影氛围与整体排版结构，严禁改变大构图；\n2. ${cleanRefineInstruction ? `重点执行以下局部修改指令：「${cleanRefineInstruction}」；` : "保持当前构图，按下方最新屏内文案与细节描述进行局部精修；"}\n3. 商品主体必须与我方商品原图 100% 一致，严禁几何拉伸变形！`
         : "";
 
       const reframeDirective = hasVerticalReframeSource
-        ? `【主图 ➔ 详情页（${effectiveRatio}）同源纵向重构硬性法则】：\n1. 严格锁定上方【同源1:1主图基准成图】的视觉世界观、潮玩展台、伴生元素与色调；\n2. 将原本紧凑的 1:1 构图在 ${effectiveRatio} 竖屏画布中纵向舒展：顶部 20% 区域拉开呼吸感排布主副标题，中部 55% 区域黄金居中陈列我方 #Prod 商品与联动展台，底部 25% 区域规整排布卖点胶囊或子卡片；\n3. 严禁对商品本体做任何纵向拉伸，商品长宽比必须与 #Prod 原图 100% 一致！`
+        ? `【主图 ➔ 详情页（${effectiveRatio}）同源纵向重构硬性法则】：\n1. 严格锁定上方【同源1:1主图基准成图】的视觉世界观、潮玩展台、伴生元素与色调；\n2. 将原本紧凑的 1:1 构图在 ${effectiveRatio} 竖屏画布中纵向舒展：顶部 20% 区域拉开呼吸感排布主副标题，中部 55% 区域黄金居中陈列我方商品与联动展台，底部 25% 区域规整排布圆角矩形卖点卡片；\n3. 严禁对商品本体做任何纵向拉伸，商品长宽比必须与商品原图 100% 一致！`
         : "";
 
-      const cleanTypo = typographyPlan?.trim() || "";
-      const cleanCopy = copywriting?.trim() || "";
+      const cleanTypo = sanitizeCopyForRender(typographyPlan?.trim() || "");
+      const cleanCopy = sanitizeCopyForRender(copywriting?.trim() || "");
       const copyBlock =
         cleanTypo && cleanCopy
           ? cleanTypo.includes(cleanCopy)
@@ -5819,12 +5991,12 @@ app.post("/api/image/generate", async (req, res) => {
 
       const textInstruction =
         textMode === "without_text"
-          ? `【无文字纯视觉底图模式】：画面中严禁渲染任何文字、字母或参数表格线，仅渲染纯净的商业场景、光影展台与我方 #Prod 产品本体，并在顶部/底部预留干净的排版负空间留白。`
-          : `【屏内中文排版与信息渲染指令（请使用清晰规整的现代商业无衬线中文字体直接渲染以下内容，层级分明，四周留白≥8%）】：\n${copyBlock || title || "品牌核心品质展示"}`;
+          ? `【无文字纯视觉底图模式】：画面中严禁渲染任何文字、字母或参数表格线，仅渲染纯净的商业场景、光影展台与我方商品本体，并在顶部/底部预留干净的排版负空间留白。`
+          : `【屏内中文排版与信息渲染指令（仅允许在画面顶部标题区和底部圆角矩形信息卡内渲染以下纯净中文文案，绝对禁止在展台底座或产品旁印出任何编号如#Prod、区域名如“潮玩舞台区”、色号代码或方括号[]！）】：\n${copyBlock || sanitizeCopyForRender(title) || "品牌核心品质展示"}`;
 
       const antiDeformBlock =
         prodRefs.length > 0
-          ? `【严禁商品变形与几何拉伸（核心硬指标）】：必须 100% 严格还原上方上传的我方自有产品实拍图（#Prod）的真实工业外形、色彩质感与壳面印花细节。无论当前分屏比例（${effectiveRatio}）如何，绝对禁止将商品垂直拉伸或横向压扁，必须通过周围环境展台与上下留白负空间适应画布比例！`
+          ? `【严禁商品变形与多角度重复堆砌（核心硬指标）】：\n1. 必须 100% 严格还原上方上传的我方自有商品实拍图的真实工业外形、色彩质感与壳面印花细节；无论当前分屏比例（${effectiveRatio}）如何，绝对禁止将商品垂直拉伸或横向压扁！\n2. ${isMultiSkuMatrixScreen ? "本屏为多花色合集屏，请将不同花色款式整齐陈列。" : "本屏为单款商品特写/场景屏，画面中央展台上仅展示 1 套商品主体（如 1 个充电仓搭配 1 对耳机），严禁将不同角度的参考图画成 2~3 个充电仓同时摆在展台上！"}\n3. 画面背景中严禁出现医药胶囊药丸形状的漂浮物，严禁在展台或背景中印出任何非文案的提示词术语！`
           : "";
 
       finalPrompt = [
@@ -5834,8 +6006,8 @@ app.post("/api/image/generate", async (req, res) => {
         reframeDirective,
         moduleSkeleton ? `【当前详情页模块定位】：${moduleSkeleton}` : "",
         antiDeformBlock,
-        `【本屏视觉场景与产品构图描述】：\n${prompt.trim()}`,
-        userNote?.trim() ? `【本屏额外补充要求】：${userNote.trim()}` : "",
+        `【本屏视觉场景与产品构图描述】：\n${sanitizePromptForRender(prompt)}`,
+        userNote?.trim() ? `【本屏额外补充要求】：${sanitizePromptForRender(userNote)}` : "",
         cleanRefineInstruction
           ? `【🔒 本次局部微调专项指令】：${cleanRefineInstruction}`
           : "",

@@ -87,7 +87,7 @@ const QUICK_VISUAL_STYLE_PRESETS: {
   {
     id: 'vibrant_trendy',
     label: '🎨 潮玩盲盒马卡龙风',
-    spec: '【①60-30-10色板锚点】：60%高明度马卡龙主题同色系渐变背景(#FFF0F5) + 30%潮玩盲盒质感PVC圆盘底座(#FCE7F3) + 10%高饱和糖果色点缀(#EC4899)；【②展台与空间材质锚点】：泡泡玛特风圆润软胶立体展台，搭配2~3个与机身印花呼应的3D漂浮小道具；【③布光方位与色温阴影】：5200K通透明亮高调棚拍柔光，温润细腻的漫反射高光与干净浅色阴影；【④字体层级与色号锚点】：活力圆体粗大标题(采用印花深色系)，副标题为糖果色圆角贴纸胶囊；【⑤UI容器与胶囊规范】：底部采用与印花同色系的浅奶油色圆角胶囊卡(严禁生硬黑棕色块)；【⑥画布边距与三段网格】：上22%标题区 + 中54%潮玩舞台区 + 下24%同色系胶囊区，左右留白≥8%。',
+    spec: '【①60-30-10色板锚点】：60%高明度马卡龙主题同色系渐变背景(#FFF0F5) + 30%潮玩盲盒质感PVC圆盘底座(#FCE7F3) + 10%高饱和糖果色点缀(#EC4899)；【②展台与空间材质锚点】：泡泡玛特风圆润软胶立体展台，搭配2~3个与机身印花呼应的3D漂浮小道具；【③布光方位与色温阴影】：5200K通透明亮高调棚拍柔光，温润细腻的漫反射高光与干净浅色阴影；【④字体层级与色号锚点】：活力圆体粗大标题(采用印花深色系)，副标题为糖果色圆角横幅条；【⑤UI容器与卡片规范】：底部采用与印花同色系的浅奶油色圆角矩形信息卡(严禁生硬黑棕色块)；【⑥画布边距与三段网格】：上22%标题区 + 中54%产品主体展示区 + 下24%底部圆角信息卡区，左右留白≥8%。',
   },
 ];
 
@@ -102,43 +102,91 @@ function extractHexColors(text?: string, fallback: string[] = ['#F5F7FA', '#E4E8
 
 function buildCuratedPrintThemeVariation(
   tagHint: string,
-  seedIndex: number
+  seedOffset = 0,
+  unifiedSpecHint = ''
 ): PrintThemeLinkageConfig {
+  const combinedHint = `${tagHint || ''} ${unifiedSpecHint || ''}`;
+  const specHexes = extractHexColors(unifiedSpecHint, []);
+  const customSpecPalette =
+    specHexes.length >= 2
+      ? `60%主背景(${specHexes[0]}) + 30%同色系展台(${specHexes[1]}) + 10%高饱和点缀(${specHexes[2] || specHexes[1]})`
+      : '';
+
   const variations: PrintThemeLinkageConfig[] = [
     {
       enabled: true,
+      printStory: `${tagHint || '芝士萌鼠潮玩款'} · 奶酪星际盲盒治愈微缩世界`,
+      themePalette:
+        customSpecPalette ||
+        '60%暖奶油芝士米白(#FFFDF7) + 30%香草奶油黄展台(#FEF3C7) + 10%芝士琥珀黄与浪漫星云粉点缀(#F59E0B)',
+      themeStage: '泡泡玛特风圆润奶油芝士质感双层圆盘底座与温润亚克力托盘',
+      themeElements: '漂浮3D微缩奶酪块、圆润小星球与微缩暖光星芒（严禁抢夺耳机主体视线）',
+      themeUiStyle: '浅奶油米白磨砂圆角矩形卖点卡片(严禁黑棕色块与药丸胶囊造型)，配深暖棕圆体标题',
+    },
+    {
+      enabled: true,
       printStory: `${tagHint || '萌趣潮玩款'} · 糖果盲盒治愈微缩世界`,
-      themePalette: '60%奶油蜜桃粉(#FFF0F3) + 30%草莓牛奶粉(#FFD6E0) + 10%糖果玫红(#FF4D79)',
+      themePalette:
+        customSpecPalette ||
+        '60%奶油蜜桃粉(#FFF0F3) + 30%草莓牛奶粉(#FFD6E0) + 10%糖果玫红(#FF4D79)',
       themeStage: '泡泡玛特风圆润果冻亚克力与奶油云朵双层微缩展台',
       themeElements: '漂浮3D软胶小爱心、微缩透明气泡球与立体Q版小星星',
-      themeUiStyle: '奶油草莓粉磨砂圆角胶囊信息卡(严禁黑棕色块)，配圆体柔光标题',
+      themeUiStyle: '奶油草莓粉磨砂圆角矩形信息卡(严禁黑棕色块)，配圆体柔光标题',
     },
     {
       enabled: true,
       printStory: `${tagHint || '清新自然款'} · 薄荷苏打假日森系乐园`,
-      themePalette: '60%冰透薄荷绿(#ECFDF5) + 30%奶油开心果绿(#A7F3D0) + 10%活力柠檬黄(#FBBF24)',
+      themePalette:
+        customSpecPalette ||
+        '60%冰透薄荷绿(#ECFDF5) + 30%奶油开心果绿(#A7F3D0) + 10%活力柠檬黄(#FBBF24)',
       themeStage: '微缩森系奶油圆盘底座与半透明冰块质感亚克力阶梯',
-      themeElements: '漂浮3D迷你幸运草、透明苏打水珠与Q版软胶小雏菊',
-      themeUiStyle: '浅薄荷奶白圆角贴纸式卖点胶囊卡，清爽果绿图标与圆润字体',
+      themeElements: '漂浮3D迷你果冻叶、透明苏打水珠与Q版软胶小雏菊',
+      themeUiStyle: '浅薄荷奶白圆角矩形卖点卡片，清爽果绿图标与圆润字体',
     },
     {
       enabled: true,
       printStory: `${tagHint || '星际幻想款'} · 云端星梦奶油蓝微缩剧场`,
-      themePalette: '60%奶盐冰川蓝(#F0F9FF) + 30%马卡龙天蓝(#BAE6FD) + 10%星芒奶黄(#FDE047)',
+      themePalette:
+        customSpecPalette ||
+        '60%奶盐冰川蓝(#F0F9FF) + 30%马卡龙天蓝(#BAE6FD) + 10%星芒奶黄(#FDE047)',
       themeStage: '蓬松云朵质感软胶底座与星轨环形微发光展台',
       themeElements: '漂浮3D微缩弯月、透明梦幻泡泡与圆润五角星挂饰',
-      themeUiStyle: '冰川奶蓝毛玻璃圆角卖点胶囊卡，深海蓝圆体字与亮黄星标',
+      themeUiStyle: '冰川奶蓝毛玻璃圆角矩形卖点卡片，深海蓝圆体字与亮黄星标',
     },
     {
       enabled: true,
       printStory: `${tagHint || '芋泥甜心款'} · 梦幻香芋星云甜品屋`,
-      themePalette: '60%奶霜香芋紫(#F5F3FF) + 30%马卡龙丁香紫(#DDD6FE) + 10%奶油蜜瓜黄(#FDE68A)',
+      themePalette:
+        customSpecPalette ||
+        '60%奶霜香芋紫(#F5F3FF) + 30%马卡龙丁香紫(#DDD6FE) + 10%奶油蜜瓜黄(#FDE68A)',
       themeStage: '丝滑香芋奶油波浪圆台与半透明珠光亚克力托盘',
       themeElements: '漂浮3D马卡龙甜点、微缩紫色星芒与糖霜珍珠颗粒',
-      themeUiStyle: '浅香芋奶油色圆角胶囊底栏，深紫罗兰圆润标题字与暖黄徽章',
+      themeUiStyle: '浅香芋奶油色圆角矩形底栏，深紫罗兰圆润标题字与暖黄徽章',
     },
   ];
-  return variations[Math.abs(seedIndex) % variations.length];
+
+  let baseIdx = 0;
+  if (/芝士|奶酪|鼠|火箭|cheese|暖米|奶油白|米白|香草|黄/i.test(combinedHint)) {
+    baseIdx = 0;
+  } else if (/粉|草莓|桃|猫|爱心|樱/i.test(combinedHint)) {
+    baseIdx = 1;
+  } else if (/绿|薄荷|森|梨|刺猬|叶|青/i.test(combinedHint)) {
+    baseIdx = 2;
+  } else if (/蓝|海|星|云|冰/i.test(combinedHint)) {
+    baseIdx = 3;
+  } else if (/紫|芋|兔|月|梦/i.test(combinedHint)) {
+    baseIdx = 4;
+  }
+
+  return variations[(baseIdx + Math.abs(seedOffset)) % variations.length];
+}
+
+function cleanCopySegment(str: string): string {
+  return (str || '')
+    .replace(/^\s*(?:第[一二三123]行\s*[:：]?\s*)?(?:顶部)?(?:主标题|大标题|副标题|痛点利益点|卖点标签|底部卖点|卖点卡片|胶囊\/参数|卖点|参数)\s*[:：]\s*/i, '')
+    .replace(/\[([^\]]+)\]/g, '$1')
+    .replace(/【([^】]+)】/g, '$1')
+    .trim();
 }
 
 function parseStructuredCopy(rawText: string): {
@@ -146,14 +194,38 @@ function parseStructuredCopy(rawText: string): {
   subheadline: string;
   capsules: string;
 } {
-  if (!rawText) {
+  if (!rawText || !rawText.trim()) {
     return { headline: '', subheadline: '', capsules: '' };
   }
-  const lines = rawText.split('\n');
+  const trimmed = rawText.trim();
+  const rawLines = trimmed
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (
+    rawLines.length === 1 &&
+    /(?:主标题|副标题|卖点|参数)\s*[:：]|；|;/i.test(rawLines[0])
+  ) {
+    const parts = rawLines[0]
+      .split(/\s*[；;]\s*|\s+(?=(?:主标题|副标题|底部|卖点|参数)\s*[:：])/g)
+      .map((p) => cleanCopySegment(p))
+      .filter(Boolean);
+    return {
+      headline: parts[0] ?? '',
+      subheadline: parts[1] ?? '',
+      capsules: parts.slice(2).join(' | '),
+    };
+  }
+
   return {
-    headline: lines[0] ?? '',
-    subheadline: lines[1] ?? '',
-    capsules: lines.slice(2).join('\n'),
+    headline: cleanCopySegment(rawLines[0] ?? ''),
+    subheadline: cleanCopySegment(rawLines[1] ?? ''),
+    capsules: rawLines
+      .slice(2)
+      .map((l) => cleanCopySegment(l))
+      .filter(Boolean)
+      .join(' | '),
   };
 }
 
@@ -162,14 +234,17 @@ function composeStructuredCopy(
   subheadline: string,
   capsules: string
 ): string {
-  if (!headline && !subheadline && !capsules) return '';
-  if (capsules) {
-    return `${headline}\n${subheadline}\n${capsules}`;
+  const h = cleanCopySegment(headline);
+  const s = cleanCopySegment(subheadline);
+  const c = cleanCopySegment(capsules);
+  if (!h && !s && !c) return '';
+  if (c) {
+    return `${h}\n${s}\n${c}`;
   }
-  if (subheadline) {
-    return `${headline}\n${subheadline}`;
+  if (s) {
+    return `${h}\n${s}`;
   }
-  return headline;
+  return h;
 }
 
 export interface DetailModularViewProps {
@@ -226,7 +301,7 @@ export interface DetailModularViewProps {
   onUpdateDetailProdRole?: (refId: string, role: string) => void;
   onUpdateDetailAssetTag?: (refId: string, newTag: string) => void;
   onAutoAnalyzeDetailRefs?: () => void;
-  onSyncFromSkuStudio?: () => void;
+  onSyncFromSkuStudio?: (targetRatio?: AspectRatioOption) => void;
   sellingPointPresets?: SkuSellingPointPreset[];
   onOpenPresetSettings?: () => void;
   onShowToast?: (text: string, type?: 'info' | 'success' | 'error') => void;
@@ -357,10 +432,23 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
     const nextSeed = (themeSeedCounter[task.id] || 0) + 1;
     setThemeSeedCounter((prev) => ({ ...prev, [task.id]: nextSeed }));
     const nextCfg = buildCuratedPrintThemeVariation(
-      boundProd?.tag || task.title,
-      nextSeed
+      boundProd?.tag || productInfoText || task.title,
+      nextSeed,
+      unifiedVisualSpec
     );
     onUpdateTask(task.id, { printThemeConfig: nextCfg });
+  };
+
+  const handleSyncThemeToAllTasks = (sourceCfg?: PrintThemeLinkageConfig) => {
+    if (!sourceCfg) return;
+    tasks.forEach((t) => {
+      onUpdateTask(t.id, {
+        printThemeConfig: {
+          ...sourceCfg,
+          enabled: true,
+        },
+      });
+    });
   };
 
   const toggleTaskProdBinding = (task: ScreenTask, prodId: string) => {
@@ -483,14 +571,37 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
               skuTasksCount > 0) && (
               <div className="flex flex-wrap items-center gap-1.5">
                 {onSyncFromSkuStudio && (skuProdCount > 0 || skuTasksCount > 0) && (
-                  <button
-                    type="button"
-                    onClick={onSyncFromSkuStudio}
-                    className="h-6 px-2 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-                  >
-                    <ArrowRightLeft className="w-3 h-3" />
-                    <span>同步主图台素材 ({skuProdCount}张)</span>
-                  </button>
+                  <div className="inline-flex items-center rounded-md border border-blue-200/80 bg-blue-50 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => onSyncFromSkuStudio()}
+                      title="仅同步主图工作台的产品原图(#Prod)至详情页素材池"
+                      className="h-6 px-2 hover:bg-blue-100 text-blue-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer border-r border-blue-200/80"
+                    >
+                      <ArrowRightLeft className="w-3 h-3" />
+                      <span>同步主图台素材 ({skuProdCount}张)</span>
+                    </button>
+                    {skuTasksCount > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onSyncFromSkuStudio('9:16')}
+                          title="将主图工作台的卡片一键流转为 9:16 手机竖屏详情模块"
+                          className="h-6 px-1.5 hover:bg-blue-100 text-blue-700 text-[10px] font-bold cursor-pointer border-r border-blue-200/80"
+                        >
+                          转9:16
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onSyncFromSkuStudio('3:4')}
+                          title="将主图工作台的卡片一键流转为 3:4 电商详情模块"
+                          className="h-6 px-1.5 hover:bg-blue-100 text-blue-700 text-[10px] font-bold cursor-pointer"
+                        >
+                          转3:4
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
                 {(prodAssets.length > 0 || caseAssets.length > 0) && (
                   <button
@@ -1062,6 +1173,34 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
               </button>
             </div>
 
+            {/* Quick Aspect Ratio Switcher (9:16 vs 3:4) in Top Canvas Bar */}
+            <div className="inline-flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/80">
+              <button
+                type="button"
+                onClick={() => onChangeAspectRatio('9:16')}
+                title="切换全套详情页画幅为 9:16 手机全屏长图比例"
+                className={`h-6 px-2 rounded-md text-[11px] font-bold cursor-pointer transition-all ${
+                  aspectRatio === '9:16'
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                9:16 手机竖屏
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeAspectRatio('3:4')}
+                title="切换全套详情页画幅为 3:4 电商标准竖版比例"
+                className={`h-6 px-2 rounded-md text-[11px] font-bold cursor-pointer transition-all ${
+                  aspectRatio === '3:4'
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                3:4 电商竖版
+              </button>
+            </div>
+
             <span className="hidden xl:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-medium">
               <ShieldCheck className="w-3.5 h-3.5" />
               <span>每屏仅传自有 #Prod + 统一规范 · 0竞品图干扰</span>
@@ -1146,16 +1285,25 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
                     {onSyncFromSkuStudio && skuTasksCount > 0 && (
-                      <button
-                        type="button"
-                        onClick={onSyncFromSkuStudio}
-                        className="h-10 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm"
-                      >
-                        <ArrowRightLeft className="w-4 h-4" />
-                        <span>从主图台导入延展 ({skuTasksCount}屏)</span>
-                      </button>
+                      <div className="inline-flex items-center rounded-xl bg-blue-600 text-white shadow-sm overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => onSyncFromSkuStudio('9:16')}
+                          className="h-10 px-3.5 hover:bg-blue-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer border-r border-blue-500"
+                        >
+                          <ArrowRightLeft className="w-4 h-4" />
+                          <span>从主图台转 9:16 详情 ({skuTasksCount}屏)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onSyncFromSkuStudio('3:4')}
+                          className="h-10 px-3 hover:bg-blue-700 text-xs font-bold cursor-pointer"
+                        >
+                          <span>转 3:4</span>
+                        </button>
+                      </div>
                     )}
                     <button
                       type="button"
@@ -1415,23 +1563,38 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                       checked &&
                                       !task.printThemeConfig?.printStory
                                     ) {
+                                      // Inherit existing active page theme first so all screens stay 100% color-consistent!
+                                      const existingPageTheme = tasks.find(
+                                        (t) =>
+                                          t.id !== task.id &&
+                                          t.printThemeConfig?.enabled !== false &&
+                                          Boolean(t.printThemeConfig?.themePalette)
+                                      )?.printThemeConfig;
                                       const boundProd = prodAssets.find((p) =>
                                         task.referenceImageIds.includes(p.id)
                                       );
                                       onUpdateTask(task.id, {
-                                        printThemeConfig:
-                                          buildCuratedPrintThemeVariation(
-                                            boundProd?.tag || task.title,
-                                            idx
-                                          ),
+                                        printThemeConfig: existingPageTheme
+                                          ? {
+                                              ...existingPageTheme,
+                                              enabled: true,
+                                            }
+                                          : buildCuratedPrintThemeVariation(
+                                              boundProd?.tag ||
+                                                productInfoText ||
+                                                task.title,
+                                              0,
+                                              unifiedVisualSpec
+                                            ),
                                       });
                                     } else {
                                       onUpdateTask(task.id, {
                                         printThemeConfig: {
                                           ...(task.printThemeConfig ||
                                             buildCuratedPrintThemeVariation(
-                                              task.title,
-                                              idx
+                                              productInfoText || task.title,
+                                              0,
+                                              unifiedVisualSpec
                                             )),
                                           enabled: checked,
                                         },
@@ -1465,16 +1628,30 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                     ]
                                       .filter(Boolean)
                                       .join(' · ')
-                                  : '开启后按产品印花定制同色系背景、盲盒底座、3D漂浮件与浅色胶囊底栏'}
+                                  : '开启后按产品印花与整页规范锁定同色系背景、底座、微缩道具与浅色圆角信息卡'}
                               </span>
                             </div>
 
                             <div className="flex items-center gap-1.5 shrink-0">
+                              {isThemeEnabled && tasks.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleSyncThemeToAllTasks(
+                                      task.printThemeConfig
+                                    )
+                                  }
+                                  className="h-6 px-2 rounded-md bg-pink-50 hover:bg-pink-100 border border-pink-200 text-[10px] font-semibold text-pink-700 cursor-pointer"
+                                  title="将本屏的印花4维配色与展台规范一键同步至全页所有分屏，杜绝跨屏跳色"
+                                >
+                                  同步全页同色
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => handleRollDetailTaskTheme(task)}
                                 className="h-6 px-2 rounded-md bg-white hover:bg-slate-100 border border-slate-200/90 text-[11px] font-semibold text-slate-700 flex items-center gap-1 cursor-pointer"
-                                title="随机切换一套潮玩马卡龙主题配色与微缩道具"
+                                title="切换另一套潮玩马卡龙主题配色与微缩道具"
                               >
                                 <Dices className="w-3 h-3 text-pink-600" />
                                 <span>换灵感</span>
@@ -1505,14 +1682,15 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                       ...(task.printThemeConfig ||
                                         buildCuratedPrintThemeVariation(
                                           task.title,
-                                          idx
+                                          0,
+                                          unifiedVisualSpec
                                         )),
                                       enabled: true,
                                       printStory: e.target.value,
                                     },
                                   })
                                 }
-                                placeholder="① 印花主题故事 (如: 草莓熊甜品乐园)"
+                                placeholder="① 印花主题故事 (如: 芝士火箭鼠微缩世界)"
                                 className="h-7 px-2 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900"
                               />
                               <input
@@ -1526,7 +1704,8 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                       ...(task.printThemeConfig ||
                                         buildCuratedPrintThemeVariation(
                                           task.title,
-                                          idx
+                                          0,
+                                          unifiedVisualSpec
                                         )),
                                       enabled: true,
                                       themePalette: e.target.value,
@@ -1545,7 +1724,8 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                       ...(task.printThemeConfig ||
                                         buildCuratedPrintThemeVariation(
                                           task.title,
-                                          idx
+                                          0,
+                                          unifiedVisualSpec
                                         )),
                                       enabled: true,
                                       themeStage: e.target.value,
@@ -1566,7 +1746,8 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                       ...(task.printThemeConfig ||
                                         buildCuratedPrintThemeVariation(
                                           task.title,
-                                          idx
+                                          0,
+                                          unifiedVisualSpec
                                         )),
                                       enabled: true,
                                       themeElements: e.target.value,
@@ -1587,14 +1768,15 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                       ...(task.printThemeConfig ||
                                         buildCuratedPrintThemeVariation(
                                           task.title,
-                                          idx
+                                          0,
+                                          unifiedVisualSpec
                                         )),
                                       enabled: true,
                                       themeUiStyle: e.target.value,
                                     },
                                   })
                                 }
-                                placeholder="⑤ 同色系UI胶囊与字体风格 (禁黑棕色块)"
+                                placeholder="⑤ 同色系UI圆角信息卡与字体风格 (禁黑棕色块)"
                                 className="sm:col-span-2 h-7 px-2 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900"
                               />
                             </div>
@@ -1602,47 +1784,108 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                         </div>
 
                         {prodAssets.length > 0 && (
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[11px] font-semibold text-slate-500">
-                              本屏绑定产品图 (#Prod，可多选组合):
-                            </span>
-                            {prodAssets.map((prod) => {
-                              const selected =
-                                boundProdIds.length === 0 ||
-                                boundProdIds.includes(prod.id);
-                              const roleInfo = PROD_ANGLE_ROLES.find(
-                                (r) =>
-                                  r.value ===
-                                  normalizeAngleRoleValue(prod.prodAngleRole)
-                              );
-                              return (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-semibold text-slate-600">
+                                本屏绑定产品图 (#Prod，建议单屏绑定 1~2 个核心角度，点击缩略图右侧 🔍 可放大看清细节):
+                              </span>
+                              {onAutoAnalyzeDetailRefs && (
                                 <button
-                                  key={prod.id}
                                   type="button"
-                                  onClick={() =>
-                                    toggleTaskProdBinding(task, prod.id)
-                                  }
-                                  className={`h-7 pl-1 pr-2 rounded-lg border text-[11px] flex items-center gap-1.5 transition-all cursor-pointer ${
-                                    selected
-                                      ? 'border-blue-600 bg-blue-50/80 text-blue-700 font-semibold'
-                                      : 'border-slate-200 bg-white text-slate-500 opacity-60 hover:opacity-100'
-                                  }`}
+                                  disabled={isExtractingStyle}
+                                  onClick={onAutoAnalyzeDetailRefs}
+                                  className="h-5 px-2 rounded bg-violet-50 hover:bg-violet-100 text-violet-700 text-[10px] font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50 shrink-0"
+                                  title="AI 自动识别所有 #Prod 的角度（正面/开盖/斜视/双耳等）并更新标签"
                                 >
-                                  <img
-                                    src={prod.previewUrl}
-                                    alt={prod.tag}
-                                    referrerPolicy="no-referrer"
-                                    className="w-5 h-5 rounded object-cover"
-                                  />
-                                  <span>#{prod.code}</span>
-                                  {roleInfo && (
-                                    <span className="text-[10px] opacity-75">
-                                      ·{roleInfo.label}
-                                    </span>
-                                  )}
+                                  <Wand2 className="w-2.5 h-2.5" />
+                                  <span>AI 自动识别各图角度</span>
                                 </button>
-                              );
-                            })}
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {prodAssets.map((prod) => {
+                                const selected =
+                                  boundProdIds.length === 0 ||
+                                  boundProdIds.includes(prod.id);
+                                const roleInfo = PROD_ANGLE_ROLES.find(
+                                  (r) =>
+                                    r.value ===
+                                    normalizeAngleRoleValue(prod.prodAngleRole)
+                                );
+                                const cleanTag = (prod.tag || prod.name || '')
+                                  .replace(/\.(png|jpe?g|webp)$/i, '')
+                                  .trim();
+                                return (
+                                  <div
+                                    key={prod.id}
+                                    onClick={() =>
+                                      toggleTaskProdBinding(task, prod.id)
+                                    }
+                                    className={`group relative h-11 pl-1.5 pr-2 rounded-xl border text-[11px] flex items-center gap-2 transition-all cursor-pointer select-none ${
+                                      selected
+                                        ? 'border-blue-600 bg-blue-50/90 text-blue-900 shadow-2xs ring-1 ring-blue-500/30'
+                                        : 'border-slate-200 bg-white text-slate-600 opacity-70 hover:opacity-100 hover:border-slate-300'
+                                    }`}
+                                  >
+                                    <div className="relative w-8 h-8 rounded-lg overflow-hidden bg-slate-100 border border-slate-200/80 shrink-0">
+                                      <img
+                                        src={prod.previewUrl}
+                                        alt={prod.tag}
+                                        referrerPolicy="no-referrer"
+                                        className="w-full h-full object-cover"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onPreviewImage(
+                                            prod.previewUrl,
+                                            `#${prod.code} · ${roleInfo?.label || '产品原图'}`,
+                                            cleanTag
+                                          );
+                                        }}
+                                        title="点击放大看清该角度大图"
+                                        className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[10px] font-bold transition-opacity cursor-zoom-in"
+                                      >
+                                        🔍
+                                      </button>
+                                    </div>
+                                    <div className="flex flex-col leading-tight min-w-0 max-w-[135px]">
+                                      <div className="flex items-center gap-1">
+                                        <span
+                                          className={`font-mono-tabular font-bold text-[11px] ${
+                                            selected
+                                              ? 'text-blue-700'
+                                              : 'text-slate-800'
+                                          }`}
+                                        >
+                                          #{prod.code}
+                                        </span>
+                                        {roleInfo && (
+                                          <span
+                                            className={`text-[10px] px-1 py-0.2 rounded font-semibold truncate ${
+                                              selected
+                                                ? 'bg-blue-600 text-white'
+                                                : 'bg-slate-100 text-slate-600'
+                                            }`}
+                                          >
+                                            {roleInfo.label}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {cleanTag && (
+                                        <span
+                                          className="text-[10px] text-slate-500 truncate"
+                                          title={cleanTag}
+                                        >
+                                          {cleanTag}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
                       </div>

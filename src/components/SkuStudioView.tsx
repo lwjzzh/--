@@ -1868,6 +1868,31 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                             <span>裂变</span>
                           </button>
                         )}
+
+                        {onExtendReplicaToDetail && (
+                          <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onExtendReplicaToDetail('3:4', task, true)
+                              }
+                              title="将本张主图直接流转为 ② 详情页工作台的 3:4 竖版分屏"
+                              className="h-7 px-1.5 hover:bg-slate-200/70 text-[10px] font-semibold text-slate-700 cursor-pointer border-r border-slate-200"
+                            >
+                              转3:4
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onExtendReplicaToDetail('9:16', task, true)
+                              }
+                              title="将本张主图直接流转为 ② 详情页工作台的 9:16 手机全屏详情分屏"
+                              className="h-7 px-1.5 hover:bg-slate-200/70 text-[10px] font-semibold text-slate-700 cursor-pointer"
+                            >
+                              转9:16
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       <button
@@ -2079,16 +2104,28 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                           </button>
                         )}
                         {onExtendReplicaToDetail && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onExtendReplicaToDetail('3:4', task, true)
-                            }
-                            title="将本张主图直接流转为 ② 详情页工作台的 3:4 竖版分屏"
-                            className="h-7 px-2 rounded-lg border border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-slate-100 text-[11px] font-medium text-slate-700 cursor-pointer"
-                          >
-                            转详情屏
-                          </button>
+                          <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onExtendReplicaToDetail('3:4', task, true)
+                              }
+                              title="将本张主图直接流转为 ② 详情页工作台的 3:4 竖版分屏"
+                              className="h-7 px-2 hover:bg-slate-200/70 text-[11px] font-medium text-slate-700 cursor-pointer border-r border-slate-200"
+                            >
+                              转3:4详情
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onExtendReplicaToDetail('9:16', task, true)
+                              }
+                              title="将本张主图直接流转为 ② 详情页工作台的 9:16 手机全屏竖版分屏"
+                              className="h-7 px-2 hover:bg-slate-200/70 text-[11px] font-medium text-slate-700 cursor-pointer"
+                            >
+                              转9:16长屏
+                            </button>
+                          </div>
                         )}
                         <button
                           type="button"

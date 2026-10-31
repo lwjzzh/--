@@ -859,6 +859,11 @@ export const studioBridge = {
   }) =>
     callStudioBackend<{
       unifiedVisualSpec: string;
+      detectedProdRoles?: {
+        id: string;
+        prodAngleRole: string;
+        tag?: string;
+      }[];
       plannedModules: {
         id: string;
         screenNumber: number;
@@ -869,6 +874,7 @@ export const studioBridge = {
         visualPrompt: string;
         referenceImageIds?: string[];
         boundProductIds?: string[];
+        printThemeConfig?: PrintThemeLinkageConfig;
       }[];
     }>('/api/detail/plan-modules', 'studio:detail-plan-modules', payload),
 

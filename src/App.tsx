@@ -7101,16 +7101,18 @@ export default function App() {
     }
   };
 
-  // Sync #Prod assets (and optionally tasks if Detail Studio is empty) from SKU Studio to Detail Studio
-  const handleSyncFromSkuStudioToDetail = () => {
+  // Sync #Prod assets (and optionally tasks if Detail Studio is empty or targetRatio is explicitly passed) from SKU Studio to Detail Studio
+  const handleSyncFromSkuStudioToDetail = (targetRatio?: AspectRatioOption) => {
     const skuProds = skuReferenceImages.filter((r) => r.category !== 'case');
     if (skuProds.length === 0 && skuTasks.length === 0) {
       showToast('主图工作台暂无可同步的产品图或主图卡片', 'error');
       return;
     }
 
-    if (skuTasks.length > 0 && tasks.length === 0) {
-      handleExtendReplicaToDetail(config.requirements.detailAspectRatio);
+    if (skuTasks.length > 0 && (targetRatio || tasks.length === 0)) {
+      handleExtendReplicaToDetail(
+        targetRatio || config.requirements.detailAspectRatio
+      );
       return;
     }
 
@@ -7401,6 +7403,27 @@ export default function App() {
         }));
       }
 
+      if (
+        Array.isArray(res.detectedProdRoles) &&
+        res.detectedProdRoles.length > 0
+      ) {
+        const roleMap = new Map(
+          res.detectedProdRoles.map((item) => [item.id, item])
+        );
+        setReferenceImages((prev) =>
+          prev.map((ref) => {
+            const matched = roleMap.get(ref.id);
+            if (!matched) return ref;
+            return {
+              ...ref,
+              prodAngleRole:
+                (matched.prodAngleRole as any) || ref.prodAngleRole,
+              tag: matched.tag || ref.tag,
+            };
+          })
+        );
+      }
+
       if (Array.isArray(res.plannedModules) && res.plannedModules.length > 0) {
         const updatedTasks: ScreenTask[] = currentModules.map((t, idx) => {
           const planned =
@@ -7421,6 +7444,15 @@ export default function App() {
               planned.boundProductIds.length > 0
                 ? planned.boundProductIds
                 : t.referenceImageIds,
+            printThemeConfig: planned.printThemeConfig
+              ? {
+                  ...planned.printThemeConfig,
+                  enabled:
+                    t.printThemeConfig?.enabled !== undefined
+                      ? t.printThemeConfig.enabled
+                      : true,
+                }
+              : t.printThemeConfig,
             caseDeliveryOverride: 'none',
           };
         });
@@ -7428,7 +7460,7 @@ export default function App() {
         setTasks(updatedTasks);
         tasksRef.current = updatedTasks;
         showToast(
-          `AI 已完成 ${updatedTasks.length} 个详情页模块的文案与场景描述规划`,
+          `AI 已完成 ${updatedTasks.length} 个详情页模块的文案、自动分镜绑定与整页同色规划`,
           'success'
         );
 
@@ -9682,7 +9714,25 @@ export default function App() {
                 detailAspectRatio: ratio,
               },
             }));
-            setTasks((prev) => prev.map((t) => ({ ...t, aspectRatio: ratio })));
+            setTasks((prev) => {
+              const next = prev.map((t) => ({
+                ...t,
+                aspectRatio: ratio,
+                benchmarkCase: (t.benchmarkCase || '').replace(
+                  /\b(3:4|9:16)\b/g,
+                  ratio
+                ),
+                visualPrompt: (t.visualPrompt || '').replace(
+                  /转(3:4|9:16)竖版/g,
+                  `转${ratio}竖版`
+                ).replace(
+                  /延展为(3:4|9:16)电商/g,
+                  `延展为${ratio}电商`
+                ),
+              }));
+              tasksRef.current = next;
+              return next;
+            });
           }}
           onChangeImageSize={(size) => {
             setConfig((prev) => ({ ...prev, defaultImageSize: size }));
