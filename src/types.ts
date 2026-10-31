@@ -558,6 +558,8 @@ export interface ScreenTask {
   resultTextNote?: string;
   generatedAt?: string;
   durationMs?: number;
+  lockResultAsRef?: boolean;
+  refineInstruction?: string;
   historyImages: {
     url: string;
     ossUrl?: string;
@@ -644,6 +646,8 @@ export interface SkuTask {
   resultTextNote?: string;
   generatedAt?: string;
   durationMs?: number;
+  lockResultAsRef?: boolean;
+  refineInstruction?: string;
   historyImages: {
     url: string;
     ossUrl?: string;

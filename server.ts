@@ -5365,6 +5365,8 @@ app.post("/api/image/generate", async (req, res) => {
       styleLinkageMode: rawStyleLinkageMode,
       printThemeConfig,
       sourceReplicaImageUrl,
+      lockedResultImageUrl,
+      refineInstruction,
       singleRequirement: rawSingleRequirement = "",
       perRefRequirement: rawPerRefRequirement = "",
       unifiedRequirement: rawUnifiedRequirement = "",
@@ -5405,6 +5407,8 @@ app.post("/api/image/generate", async (req, res) => {
         themeUiStyle?: string;
       };
       sourceReplicaImageUrl?: string;
+      lockedResultImageUrl?: string;
+      refineInstruction?: string;
       singleRequirement?: string;
       perRefRequirement?: string;
       unifiedRequirement?: string;
@@ -5516,6 +5520,23 @@ app.post("/api/image/generate", async (req, res) => {
           Boolean(rawSingleRequirement || rawPerRefRequirement) ||
           Boolean(rawUnifiedRequirement || rawGlobalRequirement)));
 
+    // Resolve optional lockedResultImageUrl for local iterative refinement ("🔒 锁图微调")
+    const cleanLockedResultUrl = (lockedResultImageUrl || "").trim();
+    const cleanRefineInstruction = (refineInstruction || "").trim();
+    let resolvedLockedResult: { data: string; mimeType: string } | null = null;
+    if (cleanLockedResultUrl) {
+      resolvedLockedResult = await resolveReferenceInlineImage(
+        {
+          mimeType: "image/png",
+          previewUrl: cleanLockedResultUrl,
+          ossUrl: /^https?:\/\//i.test(cleanLockedResultUrl)
+            ? cleanLockedResultUrl
+            : undefined,
+        },
+        ossConfig
+      );
+    }
+
     let finalPrompt = "";
 
     if (isReplicaRender) {
@@ -5545,20 +5566,33 @@ app.post("/api/image/generate", async (req, res) => {
           : "high_replica";
       const isHighReplica = normFidelity === "high_replica";
 
-      // 2. Attach Target Reference Image (#Case) - 1-to-1 Visual Structure / Style Target
-      for (const ref of rawCaseRefs.slice(0, 1)) {
-        const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
-        if (sanitized) {
-          const caseHeader = isHighReplica
-            ? `【图B · 目标复刻参考图 #${ref.code || "Case"}（高度复刻版式骨架）】：请严格参照此参考图的【版面分区结构（如首焦KV、Bento多卖点宫格、1拖2子卡片、续航功能场景或多色SKU矩阵）、镜头透视角度与文字排版位置】，将原图中的竞品商品 100% 替换为上方【图A · 我方自有产品原图】！`
-            : `【图B · 风格参考图 #${ref.code || "Case"}（参考风格模式）】：请参考此图的【整体视觉美学气质、布光氛围与版面信息结构】，围绕上方【图A · 我方自有产品原图】重构契合的场景细节与色彩搭配！`;
-          parts.push({ text: caseHeader });
-          parts.push({
-            inlineData: {
-              data: sanitized.data,
-              mimeType: sanitized.mimeType,
-            },
-          });
+      // 2. If user enabled "🔒 锁图微调" (lockedResultImageUrl), attach the locked current result as the primary composition anchor!
+      // Otherwise attach Target Reference Image (#Case).
+      if (resolvedLockedResult) {
+        parts.push({
+          text: `【🔒 当前已确认满意成图基准（局部微调锁死构图锚点）】：这是一张用户已经基本满意的当前成图！请 95% 严格保持此图的【整体构图布局、镜头透视、产品摆放位置、展台光影与环境色彩】不变，仅针对下方指定的【局部微调修改要求】或最新文案进行定点精修重绘，同时确保商品外观与【图A · 我方自有产品原图】100%一致！`,
+        });
+        parts.push({
+          inlineData: {
+            data: resolvedLockedResult.data,
+            mimeType: resolvedLockedResult.mimeType,
+          },
+        });
+      } else {
+        for (const ref of rawCaseRefs.slice(0, 1)) {
+          const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
+          if (sanitized) {
+            const caseHeader = isHighReplica
+              ? `【图B · 目标复刻参考图 #${ref.code || "Case"}（高度复刻版式骨架）】：请严格参照此参考图的【版面分区结构（如首焦KV、Bento多卖点宫格、1拖2子卡片、续航功能场景或多色SKU矩阵）、镜头透视角度与文字排版位置】，将原图中的竞品商品 100% 替换为上方【图A · 我方自有产品原图】！`
+              : `【图B · 风格参考图 #${ref.code || "Case"}（参考风格模式）】：请参考此图的【整体视觉美学气质、布光氛围与版面信息结构】，围绕上方【图A · 我方自有产品原图】重构契合的场景细节与色彩搭配！`;
+            parts.push({ text: caseHeader });
+            parts.push({
+              inlineData: {
+                data: sanitized.data,
+                mimeType: sanitized.mimeType,
+              },
+            });
+          }
         }
       }
 
@@ -5599,7 +5633,9 @@ app.post("/api/image/generate", async (req, res) => {
       const hasCase = rawCaseRefs.length > 0;
 
       let fidelityBlock = "";
-      if (hasProd && hasCase) {
+      if (resolvedLockedResult) {
+        fidelityBlock = `【🔒 锁当前成图局部微调模式（最高优先级）】\n1. 构图与环境锁定：严格锁定上方【当前已确认满意成图基准】的相机机位、产品角度、展台底座、背景色调与整体版面结构，严禁推倒重来改变大构图！\n2. 定点微调执行：${cleanRefineInstruction ? `严格执行本次局部修改指令：「${cleanRefineInstruction}」；` : "保持原构图，按最新文案与细节描述进行局部优化；"}\n3. 商品真实还原：画面中的商品主体必须100%严格保持【图A · 我方自有产品原图】的工业造型、几何比例与壳面印花细节，严禁商品拉伸变形！`;
+      } else if (hasProd && hasCase) {
         fidelityBlock = isHighReplica
           ? `【复刻程度：高度复刻（多角度产品组合 + 版式锁定）】\n1. 构图与版式锁定：严格继承【图B · 参考图】的版面分区（包括顶部标题区、中部主视觉区、以及底部的Bento卖点小卡片或数据胶囊结构）。\n2. 多角度产品精准替换：将画面中的主商品及子卡片中的商品视角，100%精准替换为上方提供的【图A · 我方自有产品原图】（共提供 ${prodRefs.length} 张角度/款式图），严格还原图A的工业轮廓、真实几何比例、充电仓与耳机细节以及壳面卡通印花图案。\n3. 【核心抗拉伸防变形原则】：无论当前输出宽高比（${effectiveRatio}）为何，绝对禁止为了填充画布而对商品本身进行垂直拉伸或横向挤压变形！必须维持商品自身的真实几何长宽比，通过背景、展台与呼吸留白延展来适应画布！\n4. 【禁止竞品元素污染】：产品主体及其所有配件、Logo、壳面印花必须100%来源于【图A】，严禁混入【图B】中竞品商品的品牌Logo或无关造型特征！`
           : `【复刻程度：参考风格（美学重构）】\n1. 风格借鉴与美学延展：提取【图B · 参考图】的整体视觉调性、光影氛围与排版层次规律。\n2. 场景与构图重塑：围绕【图A · 我方自有产品原图】重新设计契合的场景道具与背景，允许富有创意的美学构图。\n3. 【核心抗拉伸防变形原则】：100%严格还原图A产品的真实物理轮廓、工业几何比例与表面印花细节，绝对禁止任何拉伸或压扁变形！`;
@@ -5637,6 +5673,9 @@ app.post("/api/image/generate", async (req, res) => {
             : `【文字渲染设置：简体中文】：画面中的标题、副标题与底部卖点胶囊请使用清晰、高级的现代商业简体中文字体渲染${copyText ? `（指定渲染文案：${copyText}）` : "（参照图B的排版位置，适配我方产品卖点）"}。`;
 
       const userReqLines = [
+        cleanRefineInstruction
+          ? `- 🔒 本次锁图局部微调指令（最高优先级，仅修改此处要求，其余保持原图）：${cleanRefineInstruction}`
+          : "",
         singleRequirement.trim()
           ? `- 本张参考图专属要求（最高优先级）：${singleRequirement.trim()}`
           : "",
@@ -5659,7 +5698,7 @@ app.post("/api/image/generate", async (req, res) => {
         .join("\n\n")
         .trim();
     } else {
-      // ==================== PIPELINE B: MODULAR DETAIL PAGE STUDIO (Pure Product + 6-Anchor Spec + Optional 1:1->3:4/9:16 Vertical Reframing) ====================
+      // ==================== PIPELINE B: MODULAR DETAIL PAGE STUDIO (Pure Product + 6-Anchor Spec + Optional 1:1->3:4/9:16 Vertical Reframing + Optional Lock-Result Refinement) ====================
       // 1. Attach Own Product Images (#Prod) — Sole Authority for Product Identity!
       for (const ref of prodRefs.slice(0, 5)) {
         const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
@@ -5679,10 +5718,20 @@ app.post("/api/image/generate", async (req, res) => {
         }
       }
 
-      // 2. If this detail screen is extended from an already-generated 1:1 Main Image (`sourceReplicaImageUrl`),
-      // attach the 1:1 image as the Vertical Reframing Anchor so 1:1 -> 3:4/9:16 has 100% style/prop/product consistency!
+      // 2. If user enabled "🔒 锁图微调" (`resolvedLockedResult`), attach the current screen result as the primary composition lock anchor!
+      // Otherwise, if this detail screen is extended from an already-generated 1:1 Main Image (`sourceReplicaImageUrl`), attach the 1:1 image.
       let hasVerticalReframeSource = false;
-      if (sourceReplicaImageUrl && sourceReplicaImageUrl.trim()) {
+      if (resolvedLockedResult) {
+        parts.push({
+          text: `【🔒 当前分屏已确认满意成图基准（局部微调锁死构图锚点）】：这是一张用户对整体构图已经满意的当前分屏成图。请 95% 严格锁定此图的【整体构图布局、产品位置角度、展台道具、光影色调与版面结构】不变，仅按下方【🔒 本屏锁图局部微调指令】或最新文案进行定点精修，同时确保商品外观与上方我方 #Prod 产品实拍图 100% 一致！`,
+        });
+        parts.push({
+          inlineData: {
+            data: resolvedLockedResult.data,
+            mimeType: resolvedLockedResult.mimeType,
+          },
+        });
+      } else if (sourceReplicaImageUrl && sourceReplicaImageUrl.trim()) {
         const cleanSourceUrl = sourceReplicaImageUrl.trim();
         const resolvedSource = await resolveReferenceInlineImage(
           {
@@ -5708,8 +5757,8 @@ app.post("/api/image/generate", async (req, res) => {
         }
       }
 
-      // 3. Optional: Attach #Case if user explicitly enabled lock_base_swap or shared_style
-      if (caseDeliveryMode === "lock_base_swap" && rawCaseRefs.length > 0) {
+      // 3. Optional: Attach #Case if user explicitly enabled lock_base_swap or shared_style (and not in locked-result refinement mode)
+      if (!resolvedLockedResult && caseDeliveryMode === "lock_base_swap" && rawCaseRefs.length > 0) {
         for (const ref of rawCaseRefs.slice(0, 1)) {
           const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
           if (sanitized) {
@@ -5724,7 +5773,7 @@ app.post("/api/image/generate", async (req, res) => {
             });
           }
         }
-      } else if (caseDeliveryMode === "shared_style" && rawCaseRefs.length > 0) {
+      } else if (!resolvedLockedResult && caseDeliveryMode === "shared_style" && rawCaseRefs.length > 0) {
         for (const ref of rawCaseRefs.slice(0, 1)) {
           const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
           if (sanitized) {
@@ -5748,6 +5797,10 @@ app.post("/api/image/generate", async (req, res) => {
         : `【整页统一视觉规范】：现代高质感商业摄影棚拍，极简几何展台，柔和立体主光配轮廓高光，全页色温与主辅色调高度统一，四周保留至少8%呼吸留白。`;
 
       const print4dDetailBlock = buildPrint4dDirective(printThemeConfig);
+
+      const lockedRefineDirective = resolvedLockedResult
+        ? `【🔒 本屏锁当前成图局部微调硬性法则（最高优先级）】：\n1. 严格锁定上方【当前分屏已确认满意成图基准】的相机视角、商品摆位、背景展台、光影氛围与整体排版结构，严禁改变大构图；\n2. ${cleanRefineInstruction ? `重点执行以下局部修改指令：「${cleanRefineInstruction}」；` : "保持当前构图，按下方最新屏内文案与细节描述进行局部精修；"}\n3. 商品主体必须与我方 #Prod 原图 100% 一致，严禁几何拉伸变形！`
+        : "";
 
       const reframeDirective = hasVerticalReframeSource
         ? `【主图 ➔ 详情页（${effectiveRatio}）同源纵向重构硬性法则】：\n1. 严格锁定上方【同源1:1主图基准成图】的视觉世界观、潮玩展台、伴生元素与色调；\n2. 将原本紧凑的 1:1 构图在 ${effectiveRatio} 竖屏画布中纵向舒展：顶部 20% 区域拉开呼吸感排布主副标题，中部 55% 区域黄金居中陈列我方 #Prod 商品与联动展台，底部 25% 区域规整排布卖点胶囊或子卡片；\n3. 严禁对商品本体做任何纵向拉伸，商品长宽比必须与 #Prod 原图 100% 一致！`
@@ -5775,6 +5828,7 @@ app.post("/api/image/generate", async (req, res) => {
           : "";
 
       finalPrompt = [
+        lockedRefineDirective,
         specBlock,
         print4dDetailBlock,
         reframeDirective,
@@ -5782,6 +5836,9 @@ app.post("/api/image/generate", async (req, res) => {
         antiDeformBlock,
         `【本屏视觉场景与产品构图描述】：\n${prompt.trim()}`,
         userNote?.trim() ? `【本屏额外补充要求】：${userNote.trim()}` : "",
+        cleanRefineInstruction
+          ? `【🔒 本次局部微调专项指令】：${cleanRefineInstruction}`
+          : "",
         textInstruction,
       ]
         .filter(Boolean)
@@ -5956,7 +6013,7 @@ app.post("/api/image/generate", async (req, res) => {
       // Final fallback:
       // - If both #Prod and #Case were sent and caused a multi-image payload block, retry keeping ONLY the primary #Prod image so product identity is never lost.
       // - NEVER silently drop #Prod and generate a hallucinated product from text alone when prodRefs.length > 0!
-      if (prodRefs.length > 0 && rawCaseRefs.length > 0) {
+      if (prodRefs.length > 0 && (rawCaseRefs.length > 0 || resolvedLockedResult)) {
         try {
           const primaryProdResolved = await resolveReferenceInlineImage(
             prodRefs[0],
@@ -5966,7 +6023,21 @@ app.post("/api/image/generate", async (req, res) => {
             const fallbackRatio = standardRatios.has(effectiveRatio)
               ? effectiveRatio
               : "9:16";
-            const prodOnlyParts = [
+            const prodOnlyParts: any[] = [];
+            if (resolvedLockedResult) {
+              prodOnlyParts.push(
+                {
+                  text: `【当前满意成图底板 #LockedResult（最高优先级构图/光影/主体锚点）】：请严格锁死此图的整体构图与商品位置，仅按局部微调指令修改目标区域！`,
+                },
+                {
+                  inlineData: {
+                    data: resolvedLockedResult.data,
+                    mimeType: resolvedLockedResult.mimeType,
+                  },
+                }
+              );
+            }
+            prodOnlyParts.push(
               {
                 text: `【我方自有产品原图 #${prodRefs[0].code || "Prod"}】：请100%严格还原此商品外观、比例、配色与细节！`,
               },
@@ -5976,8 +6047,8 @@ app.post("/api/image/generate", async (req, res) => {
                   mimeType: primaryProdResolved.mimeType,
                 },
               },
-              { text: finalPrompt },
-            ];
+              { text: finalPrompt }
+            );
             const prodOnlyRes = await ai.models.generateContent({
               model: "gemini-nano-banana-2.1",
               contents: { parts: prodOnlyParts },
@@ -6003,9 +6074,25 @@ app.post("/api/image/generate", async (req, res) => {
           const fallbackRatio = standardRatios.has(effectiveRatio)
             ? effectiveRatio
             : "9:16";
+          const fallbackContents = resolvedLockedResult
+            ? {
+                parts: [
+                  {
+                    text: `【当前满意成图底板 #LockedResult（最高优先级构图/光影/主体锚点）】：请严格锁死此图的整体构图与商品位置，仅按局部微调指令修改目标区域！`,
+                  },
+                  {
+                    inlineData: {
+                      data: resolvedLockedResult.data,
+                      mimeType: resolvedLockedResult.mimeType,
+                    },
+                  },
+                  { text: finalPrompt },
+                ],
+              }
+            : finalPrompt;
           const promptOnlyRes = await ai.models.generateContent({
             model: "gemini-nano-banana-2.1",
-            contents: finalPrompt,
+            contents: fallbackContents,
             config: {
               imageConfig: { aspectRatio: fallbackRatio },
             },

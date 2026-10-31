@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -27,6 +27,13 @@ import {
   Dices,
   CopyPlus,
   ScanEye,
+  Lock,
+  Unlock,
+  LayoutGrid,
+  Columns2,
+  History,
+  Settings,
+  Zap,
 } from 'lucide-react';
 import {
   ReferenceImageItem,
@@ -36,6 +43,7 @@ import {
   CloudStorageProvider,
   SkuBatchConfig,
   SkuTask,
+  SkuSellingPointPreset,
   ReplicaFidelity,
   ReplicaLanguage,
   ReplicaMatchMode,
@@ -215,6 +223,8 @@ export interface SkuStudioViewProps {
     autoRunAfter: boolean
   ) => void;
   onBuildStandardFiveMainCards?: () => void;
+  sellingPointPresets?: SkuSellingPointPreset[];
+  onOpenPresetSettings?: () => void;
 }
 
 export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
@@ -255,9 +265,69 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
   onUpdateSkuProdRole,
   onFissionTaskToOtherProds,
   onBuildStandardFiveMainCards,
+  sellingPointPresets = [],
+  onOpenPresetSettings,
 }) => {
   const isR2 = storageProvider === 'cloudflare_r2';
   const cloudShort = isR2 ? 'R2' : 'OSS';
+
+  // Canvas View Mode: 'detailed_2col' (default 2-col editor) vs 'showcase_5col' (5-card overview)
+  const [canvasViewMode, setCanvasViewMode] = useState<
+    'detailed_2col' | 'showcase_5col'
+  >(() => {
+    try {
+      const saved = localStorage.getItem('ecom_studio_sku_view_mode_v1');
+      if (saved === 'showcase_5col' || saved === 'detailed_2col') {
+        return saved;
+      }
+    } catch {
+      // Ignore storage error
+    }
+    return 'detailed_2col';
+  });
+
+  const handleSelectCanvasViewMode = (
+    mode: 'detailed_2col' | 'showcase_5col'
+  ) => {
+    setCanvasViewMode(mode);
+    try {
+      localStorage.setItem('ecom_studio_sku_view_mode_v1', mode);
+    } catch {
+      // Ignore storage error
+    }
+  };
+
+  // Selling Point Presets Popover states
+  const [showGlobalPresetMenu, setShowGlobalPresetMenu] = useState(false);
+  const [openCardPresetMenuId, setOpenCardPresetMenuId] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    if (!showGlobalPresetMenu && !openCardPresetMenuId) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && !target.closest('[data-preset-menu-root="true"]')) {
+        setShowGlobalPresetMenu(false);
+        setOpenCardPresetMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [showGlobalPresetMenu, openCardPresetMenuId]);
+
+  const effectivePresets = useMemo(() => {
+    if (sellingPointPresets && sellingPointPresets.length > 0) {
+      return sellingPointPresets;
+    }
+    if (
+      skuBatchConfig.sellingPointPresets &&
+      skuBatchConfig.sellingPointPresets.length > 0
+    ) {
+      return skuBatchConfig.sellingPointPresets;
+    }
+    return [];
+  }, [sellingPointPresets, skuBatchConfig.sellingPointPresets]);
 
   // Left sidebar state
   const [showUrlInput, setShowUrlInput] = useState(false);
@@ -991,9 +1061,107 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
 
           {/* 4. 全局卖点文案与生成规格 */}
           <section className="space-y-2.5 pt-2 border-t border-slate-100">
-            <span className="block text-[13px] font-bold text-slate-900">
-              4. 核心卖点与画幅规格
-            </span>
+            <div className="flex items-center justify-between gap-2 relative">
+              <span className="block text-[13px] font-bold text-slate-900">
+                4. 核心卖点与画幅规格
+              </span>
+
+              <div className="flex items-center gap-1.5">
+                {effectivePresets.length > 0 && (
+                  <div className="relative" data-preset-menu-root="true">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setShowGlobalPresetMenu((prev) => !prev)
+                      }
+                      className="h-6 px-2 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                      title="从防丢常用卖点库一键填入卖点文案与默认标题前缀"
+                    >
+                      <Zap className="w-3 h-3 text-amber-600" />
+                      <span>常用卖点 ({effectivePresets.length})</span>
+                      <ChevronDown className="w-3 h-3" />
+                    </button>
+
+                    {showGlobalPresetMenu && (
+                      <div className="absolute right-0 top-full mt-1.5 w-72 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-40 space-y-1">
+                        <div className="flex items-center justify-between px-2 py-1 border-b border-slate-100">
+                          <span className="text-[11px] font-bold text-slate-800">
+                            ⚡ 一键套用常用卖点方案
+                          </span>
+                          {onOpenPresetSettings && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowGlobalPresetMenu(false);
+                                onOpenPresetSettings();
+                              }}
+                              className="text-[10px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5 cursor-pointer"
+                            >
+                              <Settings className="w-2.5 h-2.5" />
+                              <span>管理方案库</span>
+                            </button>
+                          )}
+                        </div>
+                        <div className="max-h-52 overflow-y-auto space-y-1 py-0.5">
+                          {effectivePresets.map((preset) => (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              onClick={() => {
+                                const combinedText = [
+                                  preset.sellingPointBadge,
+                                  preset.packageSpecNote,
+                                ]
+                                  .map((s) => (s || '').trim())
+                                  .filter(Boolean)
+                                  .join(' ｜ ');
+                                onUpdateSkuBatchConfig({
+                                  referenceInfoText: combinedText,
+                                  ...(preset.titlePrefix
+                                    ? { titlePrefix: preset.titlePrefix }
+                                    : {}),
+                                  ...(preset.subtitleText
+                                    ? { subtitleText: preset.subtitleText }
+                                    : {}),
+                                });
+                                setShowGlobalPresetMenu(false);
+                                onShowToast(
+                                  `已填入常用卖点方案「${preset.label}」`,
+                                  'success'
+                                );
+                              }}
+                              className="w-full text-left p-2 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-200/80 transition-all cursor-pointer"
+                            >
+                              <div className="text-xs font-bold text-slate-900 truncate">
+                                {preset.label}
+                              </div>
+                              <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                                {preset.sellingPointBadge}
+                                {preset.packageSpecNote
+                                  ? ` · ${preset.packageSpecNote}`
+                                  : ''}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {skuBatchConfig.referenceInfoText && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onUpdateSkuBatchConfig({ referenceInfoText: '' })
+                    }
+                    className="text-[11px] text-slate-400 hover:text-rose-600 cursor-pointer"
+                  >
+                    清空
+                  </button>
+                )}
+              </div>
+            </div>
             <textarea
               rows={2}
               value={skuBatchConfig.referenceInfoText}
@@ -1149,6 +1317,38 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {/* View Mode Segmented Switcher: 双栏精修 vs 5列橱窗总览 */}
+            {skuTasks.length > 0 && (
+              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/80">
+                <button
+                  type="button"
+                  onClick={() => handleSelectCanvasViewMode('detailed_2col')}
+                  title="双栏精修视图：展示左参考/产品配对图 + 右成图 + 完整印花4维参数"
+                  className={`h-7 px-2.5 rounded-md text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                    canvasViewMode === 'detailed_2col'
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  <Columns2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">双栏精修</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectCanvasViewMode('showcase_5col')}
+                  title="5列橱窗总览：一屏横排审阅全套 5 张主图的色调统一感、历史版本切换与快捷锁图微调"
+                  className={`h-7 px-2.5 rounded-md text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                    canvasViewMode === 'showcase_5col'
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">5列橱窗</span>
+                </button>
+              </div>
+            )}
+
             {(prodAssets.length > 0 || caseAssets.length > 0) &&
               onSaveSkuAssetsToLibrary && (
                 <button
@@ -1366,8 +1566,340 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                 </div>
               </div>
             </div>
+          ) : canvasViewMode === 'showcase_5col' ? (
+            /* ================= 5-COLUMN SHOWCASE OVERVIEW GRID (5列橱窗总览视图) ================= */
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5">
+              {skuTasks.map((task, idx) => {
+                const boundProds = prodAssets.filter((p) =>
+                  task.productRefIds.includes(p.id)
+                );
+                const effectiveBoundProds =
+                  boundProds.length > 0 ? boundProds : prodAssets.slice(0, 1);
+                const boundProd = effectiveBoundProds[0];
+                const boundCase =
+                  caseAssets.find((c) => task.caseRefIds.includes(c.id)) ||
+                  caseAssets[idx % Math.max(1, caseAssets.length)];
+                const isGenerating =
+                  task.status === 'generating' ||
+                  generatingPromptSkuTaskId === task.id;
+                const themeCfg: PrintThemeLinkageConfig =
+                  task.printThemeConfig || {
+                    printStory: '',
+                    themePalette: '',
+                    themeStage: '',
+                    themeElements: '',
+                    themeUiStyle: '',
+                  };
+                const hexSwatches = extractHexSwatches(
+                  `${themeCfg.themePalette} ${themeCfg.themeUiStyle}`
+                );
+                const orderedHistory = [...(task.historyImages || [])].reverse();
+
+                return (
+                  <div
+                    key={task.id}
+                    className="bg-white border border-slate-200/90 hover:border-slate-300 rounded-2xl p-3 shadow-2xs flex flex-col justify-between gap-2.5 transition-all"
+                  >
+                    <div className="space-y-2">
+                      {/* Compact Card Header: Index + Editable Title + Delete */}
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <span className="px-1.5 py-0.5 rounded bg-slate-900 text-white text-[10px] font-mono-tabular font-bold shrink-0">
+                            #{String(task.skuIndex || idx + 1).padStart(2, '0')}
+                          </span>
+                          <input
+                            type="text"
+                            value={task.skuTitle}
+                            onChange={(e) => {
+                              const nextTitle = e.target.value;
+                              const nextCopy = Array.from(
+                                new Set(
+                                  [
+                                    nextTitle,
+                                    task.sellingPointBadge,
+                                    task.packageSpecNote,
+                                  ]
+                                    .map((s) => (s || '').trim())
+                                    .filter(Boolean)
+                                )
+                              ).join('\n');
+                              onUpdateSkuTask(task.id, {
+                                skuTitle: nextTitle,
+                                typographyPlan: nextCopy,
+                              });
+                            }}
+                            placeholder="主标题/款式..."
+                            className="w-full h-6 px-1.5 text-xs font-bold text-slate-900 bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:outline-none focus:border-slate-900 truncate"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteSkuTask(task.id)}
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded hover:bg-rose-50 cursor-pointer shrink-0"
+                          title="删除此卡"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      {/* Large Showcase Preview Box */}
+                      <div
+                        className={`relative w-full ${getAspectBoxClass(
+                          task.aspectRatio
+                        )} rounded-xl overflow-hidden bg-slate-50 border border-slate-200 flex items-center justify-center group`}
+                      >
+                        {isGenerating ? (
+                          <div className="flex flex-col items-center gap-1.5 text-xs text-slate-500">
+                            <Loader2 className="w-5 h-5 animate-spin text-slate-900" />
+                            <span className="text-[11px]">正在渲染...</span>
+                          </div>
+                        ) : task.resultImageUrl ? (
+                          <>
+                            <img
+                              src={task.resultImageUrl}
+                              alt={task.skuTitle}
+                              onClick={() =>
+                                onPreviewImage(
+                                  task.resultImageUrl!,
+                                  `复刻成图 #${task.skuIndex} · ${task.skuTitle}`,
+                                  `${task.aspectRatio} · ${task.imageSize}`
+                                )
+                              }
+                              className="w-full h-full object-contain cursor-zoom-in bg-white"
+                            />
+                            {/* Corner Source Mini Badges */}
+                            <div className="absolute top-1.5 left-1.5 flex items-center gap-1 bg-slate-900/75 backdrop-blur-xs px-1.5 py-0.5 rounded-md text-[9px] text-white font-mono-tabular">
+                              <span>{task.aspectRatio}</span>
+                              {hexSwatches.length > 0 && (
+                                <span className="flex items-center -space-x-0.5 ml-0.5">
+                                  {hexSwatches.slice(0, 3).map((hex) => (
+                                    <span
+                                      key={hex}
+                                      style={{ backgroundColor: hex }}
+                                      className="w-2.5 h-2.5 rounded-full border border-white/80 inline-block"
+                                    />
+                                  ))}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="absolute bottom-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onPreviewImage(
+                                    task.resultImageUrl!,
+                                    `复刻成图 #${task.skuIndex} · ${task.skuTitle}`
+                                  )
+                                }
+                                className="p-1.5 bg-slate-900/80 hover:bg-slate-900 text-white rounded-md cursor-pointer"
+                                title="放大预览"
+                              >
+                                <Maximize2 className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => downloadSingleSkuImage(task)}
+                                className="p-1.5 bg-blue-600/90 hover:bg-blue-700 text-white rounded-md cursor-pointer"
+                                title="下载单图"
+                              >
+                                <Download className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </>
+                        ) : task.status === 'error' ? (
+                          <div className="p-3 text-center space-y-1">
+                            <AlertCircle className="w-4 h-4 text-rose-500 mx-auto" />
+                            <p className="text-[10px] text-rose-600 line-clamp-2">
+                              {task.errorMessage || '生图失败，请点击重绘'}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-3 flex flex-col items-center gap-2 text-center">
+                            <div className="flex items-center gap-1.5">
+                              {boundCase && (
+                                <img
+                                  src={boundCase.previewUrl}
+                                  alt={boundCase.tag}
+                                  referrerPolicy="no-referrer"
+                                  className="w-10 h-10 rounded-lg object-cover border border-slate-200"
+                                />
+                              )}
+                              {boundProd && (
+                                <img
+                                  src={boundProd.previewUrl}
+                                  alt={boundProd.tag}
+                                  referrerPolicy="no-referrer"
+                                  className="w-10 h-10 rounded-lg object-cover border border-blue-200"
+                                />
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => onGenerateSingleSkuImage(task)}
+                              className="text-[11px] font-semibold text-slate-500 hover:text-slate-900 flex items-center gap-1 cursor-pointer"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                              <span>点击立即出图</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* History Version Strip (v1 / v2 / v3...) */}
+                      {orderedHistory.length > 0 && (
+                        <div className="flex items-center justify-between gap-1 px-1 py-1 rounded-lg bg-slate-50 border border-slate-200/70">
+                          <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-0.5 shrink-0">
+                            <History className="w-2.5 h-2.5" />
+                            <span>版本:</span>
+                          </span>
+                          <div className="flex items-center gap-1 overflow-x-auto">
+                            {orderedHistory.map((hItem, vIdx) => {
+                              const isCurrentVersion =
+                                task.resultImageUrl === hItem.url;
+                              return (
+                                <button
+                                  key={`${task.id}-v-${vIdx}-${hItem.timestamp}`}
+                                  type="button"
+                                  onClick={() => {
+                                    onUpdateSkuTask(task.id, {
+                                      resultImageUrl: hItem.url,
+                                      resultOssUrl: hItem.ossUrl,
+                                      resultCloudUrls: hItem.cloudUrls,
+                                      status: 'completed',
+                                    });
+                                    onShowToast(
+                                      `已切换至 v${vIdx + 1} 历史版本（${hItem.timestamp}）`,
+                                      'info'
+                                    );
+                                  }}
+                                  title={`切换至 v${vIdx + 1} (${hItem.timestamp})`}
+                                  className={`h-5 px-1.5 rounded text-[10px] font-mono-tabular font-bold flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
+                                    isCurrentVersion
+                                      ? 'bg-slate-900 text-white shadow-2xs'
+                                      : 'bg-white text-slate-600 border border-slate-200 hover:border-slate-400'
+                                  }`}
+                                >
+                                  <span>v{vIdx + 1}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Single-line Selling Point Quick Edit */}
+                      <input
+                        type="text"
+                        value={task.sellingPointBadge}
+                        onChange={(e) => {
+                          const nextBadge = e.target.value;
+                          const nextCopy = Array.from(
+                            new Set(
+                              [
+                                task.skuTitle,
+                                nextBadge,
+                                task.packageSpecNote,
+                              ]
+                                .map((s) => (s || '').trim())
+                                .filter(Boolean)
+                            )
+                          ).join('\n');
+                          onUpdateSkuTask(task.id, {
+                            sellingPointBadge: nextBadge,
+                            typographyPlan: nextCopy,
+                          });
+                        }}
+                        placeholder="画面副标题 / 卖点胶囊..."
+                        className="w-full h-6.5 px-2 text-[11px] bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-slate-900 text-slate-700 truncate"
+                      />
+
+                      {/* Lock Current Result Refinement Input (when locked) */}
+                      {task.resultImageUrl && task.lockResultAsRef && (
+                        <input
+                          type="text"
+                          value={task.refineInstruction || ''}
+                          onChange={(e) =>
+                            onUpdateSkuTask(task.id, {
+                              refineInstruction: e.target.value,
+                            })
+                          }
+                          placeholder="🔒 输入局部微调指令（如：大字改亮黄色）..."
+                          className="w-full h-6.5 px-2 text-[11px] bg-amber-50/90 border border-amber-300 rounded-lg focus:bg-white focus:outline-none focus:border-amber-600 text-amber-950 placeholder:text-amber-600/70"
+                        />
+                      )}
+                    </div>
+
+                    {/* Showcase Card Bottom Action Bar */}
+                    <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-1">
+                      <div className="flex items-center gap-1">
+                        {task.resultImageUrl && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onUpdateSkuTask(task.id, {
+                                lockResultAsRef: !task.lockResultAsRef,
+                              })
+                            }
+                            title="开启后将以当前满意成图为构图锚点，仅对文案或局部细节做微调重绘"
+                            className={`h-7 px-2 rounded-lg text-[10px] font-semibold border flex items-center gap-1 transition-all cursor-pointer ${
+                              task.lockResultAsRef
+                                ? 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            {task.lockResultAsRef ? (
+                              <Lock className="w-3 h-3" />
+                            ) : (
+                              <Unlock className="w-3 h-3" />
+                            )}
+                            <span>锁图微调</span>
+                          </button>
+                        )}
+
+                        {prodAssets.length > 1 && onFissionTaskToOtherProds && (
+                          <button
+                            type="button"
+                            onClick={() => openFissionModalForTask(task)}
+                            title="拿此图一键裂变其他花色"
+                            className="h-7 px-1.5 rounded-lg border border-blue-200 bg-blue-50/70 hover:bg-blue-100 text-[10px] font-semibold text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                          >
+                            <CopyPlus className="w-3 h-3" />
+                            <span>裂变</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => onGenerateSingleSkuImage(task)}
+                        disabled={isGenerating}
+                        className={`h-7 px-2.5 rounded-lg text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50 ${
+                          task.lockResultAsRef && task.resultImageUrl
+                            ? 'bg-amber-600 hover:bg-amber-700'
+                            : 'bg-slate-900 hover:bg-black'
+                        }`}
+                      >
+                        {isGenerating ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3 h-3" />
+                        )}
+                        <span>
+                          {task.resultImageUrl
+                            ? task.lockResultAsRef
+                              ? '微调重绘'
+                              : '重绘'
+                            : '出图'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           ) : (
-            /* ================= POPULATED STATE: REPLICA TASK CARDS GRID ================= */
+            /* ================= POPULATED STATE: REPLICA TASK CARDS GRID (双栏精修视图) ================= */
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               {skuTasks.map((task, idx) => {
                 const boundProds = prodAssets.filter((p) =>
@@ -1410,6 +1942,7 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                     themeCfg.themeStage ||
                     themeCfg.themeElements
                 );
+                const orderedHistory = [...(task.historyImages || [])].reverse();
 
                 const toggleCardProdRef = (prodId: string) => {
                   const currentIds =
@@ -1511,6 +2044,29 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
+                        {task.resultImageUrl && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onUpdateSkuTask(task.id, {
+                                lockResultAsRef: !task.lockResultAsRef,
+                              })
+                            }
+                            title="开启后将以本卡当前满意成图为构图基准，仅对局部元素或文字进行微调重绘，不再大幅改变构图"
+                            className={`h-7 px-2 rounded-lg border text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                              task.lockResultAsRef
+                                ? 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                                : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {task.lockResultAsRef ? (
+                              <Lock className="w-3 h-3" />
+                            ) : (
+                              <Unlock className="w-3 h-3" />
+                            )}
+                            <span>锁图微调</span>
+                          </button>
+                        )}
                         {prodAssets.length > 1 && onFissionTaskToOtherProds && (
                           <button
                             type="button"
@@ -1528,7 +2084,7 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                             onClick={() =>
                               onExtendReplicaToDetail('3:4', task, true)
                             }
-                            title="将本张主图直接流转为 ① 详情页工作台的 3:4 竖版分屏"
+                            title="将本张主图直接流转为 ② 详情页工作台的 3:4 竖版分屏"
                             className="h-7 px-2 rounded-lg border border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-slate-100 text-[11px] font-medium text-slate-700 cursor-pointer"
                           >
                             转详情屏
@@ -1538,7 +2094,11 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                           type="button"
                           onClick={() => onGenerateSingleSkuImage(task)}
                           disabled={isGenerating}
-                          className="h-7 px-3 rounded-lg bg-slate-900 hover:bg-black text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          className={`h-7 px-3 rounded-lg text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                            task.lockResultAsRef && task.resultImageUrl
+                              ? 'bg-amber-600 hover:bg-amber-700'
+                              : 'bg-slate-900 hover:bg-black'
+                          }`}
                         >
                           {isGenerating ? (
                             <Loader2 className="w-3 h-3 animate-spin" />
@@ -1546,7 +2106,11 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                             <RefreshCw className="w-3 h-3" />
                           )}
                           <span>
-                            {task.resultImageUrl ? '重新复刻' : '立即复刻'}
+                            {task.resultImageUrl
+                              ? task.lockResultAsRef
+                                ? '🔒 锁图微调重绘'
+                                : '重新复刻'
+                              : '立即复刻'}
                           </span>
                         </button>
                         <button
@@ -1560,7 +2124,7 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Visual Comparison Row: [参考图 + 多角度产品原图] ---> [自适应比例复刻结果图] */}
+                    {/* Visual Comparison Row: [参考图 + 多角度产品原图] ---> [自适应比例复刻结果图 + 历史版本条] */}
                     <div className="grid grid-cols-12 gap-3 items-center bg-slate-50/80 border border-slate-200/60 rounded-xl p-3">
                       {/* Left 5 cols: Source Inputs (#Case + Multi-Angle #Prod) */}
                       <div className="col-span-5 flex flex-col gap-2">
@@ -1746,12 +2310,16 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                         <ArrowRight className="w-4 h-4" />
                       </div>
 
-                      {/* Right 6 cols: Generated Replica Output (Dynamic Aspect Ratio) */}
-                      <div className="col-span-6 flex items-center justify-center">
+                      {/* Right 6 cols: Generated Replica Output (Dynamic Aspect Ratio) + History Version Strip */}
+                      <div className="col-span-6 flex flex-col gap-2">
                         <div
                           className={`relative w-full ${getAspectBoxClass(
                             task.aspectRatio
-                          )} mx-auto rounded-xl overflow-hidden bg-white border border-slate-200 flex items-center justify-center group`}
+                          )} mx-auto rounded-xl overflow-hidden bg-white border ${
+                            task.lockResultAsRef && task.resultImageUrl
+                              ? 'border-amber-400 ring-2 ring-amber-400/25'
+                              : 'border-slate-200'
+                          } flex items-center justify-center group`}
                         >
                           {isGenerating ? (
                             <div className="flex flex-col items-center gap-2 text-xs text-slate-500">
@@ -1772,6 +2340,12 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                                 }
                                 className="w-full h-full object-contain cursor-zoom-in"
                               />
+                              {task.lockResultAsRef && (
+                                <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-amber-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-xs">
+                                  <Lock className="w-2.5 h-2.5" />
+                                  <span>已锁定此成图为微调基准</span>
+                                </span>
+                              )}
                               <div className="absolute bottom-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button
                                   type="button"
@@ -1824,12 +2398,89 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                             </button>
                           )}
                         </div>
+
+                        {/* Non-destructive History Version Strip (v1 / v2 / v3...) */}
+                        {orderedHistory.length > 0 && (
+                          <div className="flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg bg-white border border-slate-200/80">
+                            <span className="text-[10px] font-semibold text-slate-500 flex items-center gap-1 shrink-0">
+                              <History className="w-3 h-3 text-slate-400" />
+                              <span>历史版本 ({orderedHistory.length}):</span>
+                            </span>
+                            <div className="flex items-center gap-1 overflow-x-auto">
+                              {orderedHistory.map((hItem, vIdx) => {
+                                const isCurrentVersion =
+                                  task.resultImageUrl === hItem.url;
+                                return (
+                                  <button
+                                    key={`${task.id}-hist-${vIdx}-${hItem.timestamp}`}
+                                    type="button"
+                                    onClick={() => {
+                                      onUpdateSkuTask(task.id, {
+                                        resultImageUrl: hItem.url,
+                                        resultOssUrl: hItem.ossUrl,
+                                        resultCloudUrls: hItem.cloudUrls,
+                                        status: 'completed',
+                                      });
+                                      onShowToast(
+                                        `已切换至第 v${vIdx + 1} 版成图（生成于 ${hItem.timestamp}）`,
+                                        'info'
+                                      );
+                                    }}
+                                    title={`点击切换至 v${vIdx + 1} (${hItem.timestamp})`}
+                                    className={`h-6 pl-1 pr-1.5 rounded-md text-[10px] font-mono-tabular font-bold flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
+                                      isCurrentVersion
+                                        ? 'bg-slate-900 text-white shadow-2xs ring-1 ring-slate-900'
+                                        : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <img
+                                      src={hItem.url}
+                                      alt={`v${vIdx + 1}`}
+                                      className="w-4 h-4 rounded-xs object-cover"
+                                    />
+                                    <span>v{vIdx + 1}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
+                    {/* 🔒 Lock Current Result for Local Refinement Input Bar */}
+                    {task.resultImageUrl && task.lockResultAsRef && (
+                      <div className="rounded-xl bg-amber-50/90 border border-amber-300/90 p-2.5 flex items-center gap-2">
+                        <span className="text-[11px] font-bold text-amber-900 flex items-center gap-1 shrink-0">
+                          <Lock className="w-3.5 h-3.5 text-amber-600" />
+                          <span>锁当前成图微调:</span>
+                        </span>
+                        <input
+                          type="text"
+                          value={task.refineInstruction || ''}
+                          onChange={(e) =>
+                            onUpdateSkuTask(task.id, {
+                              refineInstruction: e.target.value,
+                            })
+                          }
+                          placeholder="输入局部修改指令（如：保持当前构图和耳机不变，把顶部标题大字改成亮黄色、去掉右下角多余星星）..."
+                          className="flex-1 h-7 px-2.5 text-xs bg-white border border-amber-300 rounded-lg focus:outline-none focus:border-amber-600 text-slate-900 placeholder:text-slate-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => onGenerateSingleSkuImage(task)}
+                          disabled={isGenerating}
+                          className="h-7 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer shrink-0 disabled:opacity-50"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          <span>执行微调</span>
+                        </button>
+                      </div>
+                    )}
+
                     {/* Editable Copywriting, Compact Collapsible 4D Print Theme Bar & Prompt */}
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 relative">
                         <span className="text-[11px] font-semibold text-slate-500 shrink-0">
                           画面卖点文案:
                         </span>
@@ -1857,6 +2508,89 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                           placeholder="副标题与底部胶囊卖点（如：蓝牙V6.0 ｜ ENC智能降噪 ｜ 50H超长续航）..."
                           className="flex-1 h-7 px-2.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-slate-900"
                         />
+
+                        {/* Per-Card Selling Point Preset Quick Picker */}
+                        {effectivePresets.length > 0 && (
+                          <div className="relative shrink-0" data-preset-menu-root="true">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setOpenCardPresetMenuId((prev) =>
+                                  prev === task.id ? null : task.id
+                                )
+                              }
+                              title="从常用卖点方案库一键填入本卡卖点文案"
+                              className="h-7 px-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Zap className="w-3 h-3 text-amber-600" />
+                              <span>常用卖点</span>
+                            </button>
+
+                            {openCardPresetMenuId === task.id && (
+                              <div className="absolute right-0 bottom-full mb-1.5 w-68 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-30 space-y-1">
+                                <div className="flex items-center justify-between px-1.5 py-1 border-b border-slate-100">
+                                  <span className="text-[10px] font-bold text-slate-700">
+                                    填入本卡卖点文案
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setOpenCardPresetMenuId(null)
+                                    }
+                                    className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                                <div className="max-h-44 overflow-y-auto space-y-1">
+                                  {effectivePresets.map((preset) => (
+                                    <button
+                                      key={preset.id}
+                                      type="button"
+                                      onClick={() => {
+                                        const nextBadge =
+                                          preset.sellingPointBadge.trim();
+                                        const nextSpec =
+                                          (preset.packageSpecNote || '').trim() ||
+                                          task.packageSpecNote;
+                                        const nextCopy = Array.from(
+                                          new Set(
+                                            [
+                                              task.skuTitle,
+                                              nextBadge,
+                                              nextSpec,
+                                            ]
+                                              .map((s) => (s || '').trim())
+                                              .filter(Boolean)
+                                          )
+                                        ).join('\n');
+                                        onUpdateSkuTask(task.id, {
+                                          sellingPointBadge: nextBadge,
+                                          packageSpecNote: nextSpec,
+                                          typographyPlan: nextCopy,
+                                        });
+                                        setOpenCardPresetMenuId(null);
+                                        onShowToast(
+                                          `已填入卖点「${preset.label}」`,
+                                          'success'
+                                        );
+                                      }}
+                                      className="w-full text-left p-1.5 rounded-lg hover:bg-slate-50 text-xs transition-colors cursor-pointer"
+                                    >
+                                      <div className="font-bold text-slate-800 truncate">
+                                        {preset.label}
+                                      </div>
+                                      <div className="text-[10px] text-slate-500 truncate">
+                                        {preset.sellingPointBadge}
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         <button
                           type="button"
                           onClick={() => toggleExpandTaskPrompt(task.id)}
@@ -1908,7 +2642,8 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                                     themeCfg.themePalette,
                                   ]
                                     .filter(Boolean)
-                                    .join(' · ')}
+                                    .join(' · ')
+                                  }
                                 </span>
                               ) : (
                                 <span className="text-[11px] text-slate-400 truncate">

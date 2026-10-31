@@ -1089,12 +1089,13 @@ export const MasterLibraryView: React.FC<MasterLibraryViewProps> = ({
                       const chosen = commonAssets.filter((a) =>
                         selectedAssetIds.includes(a.id)
                       );
-                      onPushAssetsToStudio(chosen, 'detail_studio');
+                      onPushAssetsToStudio(chosen, 'sku_studio');
                     }}
-                    className="btn-secondary px-2 py-0.5 text-[11px] flex items-center gap-1 cursor-pointer"
+                    className="btn-primary px-2 py-0.5 text-[11px] flex items-center gap-1 cursor-pointer"
+                    title="推至 ① 主图/SKU工作台"
                   >
-                    <LayoutList className="w-3 h-3 text-slate-600" />
-                    <span>推详情</span>
+                    <Palette className="w-3 h-3" />
+                    <span>推主图/SKU</span>
                   </button>
                   <button
                     type="button"
@@ -1102,12 +1103,13 @@ export const MasterLibraryView: React.FC<MasterLibraryViewProps> = ({
                       const chosen = commonAssets.filter((a) =>
                         selectedAssetIds.includes(a.id)
                       );
-                      onPushAssetsToStudio(chosen, 'sku_studio');
+                      onPushAssetsToStudio(chosen, 'detail_studio');
                     }}
-                    className="btn-primary px-2 py-0.5 text-[11px] flex items-center gap-1 cursor-pointer"
+                    className="btn-secondary px-2 py-0.5 text-[11px] flex items-center gap-1 cursor-pointer"
+                    title="推至 ② 详情页工作台"
                   >
-                    <Palette className="w-3 h-3" />
-                    <span>推SKU</span>
+                    <LayoutList className="w-3 h-3 text-slate-600" />
+                    <span>推详情</span>
                   </button>
                   {onBatchUploadCommonAssetsToOss && (
                     <button
@@ -1401,28 +1403,28 @@ export const MasterLibraryView: React.FC<MasterLibraryViewProps> = ({
                         </div>
                       </div>
 
-                      {/* Unified Bottom 4-Icon Action Bar (Detail | SKU | Upload Cloud | Delete) */}
+                      {/* Unified Bottom 4-Icon Action Bar (SKU | Detail | Upload Cloud | Delete) */}
                       <div className="flex items-center justify-between gap-0.5 pt-1 mt-auto border-t border-slate-100">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onPushAssetsToStudio([asset], 'detail_studio')
-                          }
-                          className="btn-ghost flex-1 py-0.5 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer transition-colors"
-                          title="推至 ① 详情页工作台"
-                        >
-                          <LayoutList className="w-3 h-3" />
-                        </button>
-
                         <button
                           type="button"
                           onClick={() =>
                             onPushAssetsToStudio([asset], 'sku_studio')
                           }
                           className="btn-ghost flex-1 py-0.5 flex items-center justify-center text-slate-600 hover:text-blue-600 hover:bg-blue-50/60 rounded cursor-pointer transition-colors"
-                          title="推至 ② SKU工作台"
+                          title="推至 ① 主图/SKU工作台"
                         >
                           <Palette className="w-3 h-3" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onPushAssetsToStudio([asset], 'detail_studio')
+                          }
+                          className="btn-ghost flex-1 py-0.5 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer transition-colors"
+                          title="推至 ② 详情页工作台"
+                        >
+                          <LayoutList className="w-3 h-3" />
                         </button>
 
                         <button
@@ -1614,23 +1616,6 @@ export const MasterLibraryView: React.FC<MasterLibraryViewProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setRecordSourceFilter('detail_studio')}
-                    className={`px-2.5 py-0.5 rounded-[5px] text-[11px] transition-all cursor-pointer font-mono-tabular ${
-                      recordSourceFilter === 'detail_studio'
-                        ? 'macos-segmented-thumb-active'
-                        : 'text-slate-600 hover:text-slate-900 font-medium'
-                    }`}
-                  >
-                    ① 详情页 (
-                    {
-                      generationRecords.filter(
-                        (r) => r.sourceStudio === 'detail_studio'
-                      ).length
-                    }
-                    )
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setRecordSourceFilter('sku_studio')}
                     className={`px-2.5 py-0.5 rounded-[5px] text-[11px] transition-all cursor-pointer font-mono-tabular ${
                       recordSourceFilter === 'sku_studio'
@@ -1638,10 +1623,27 @@ export const MasterLibraryView: React.FC<MasterLibraryViewProps> = ({
                         : 'text-slate-600 hover:text-slate-900 font-medium'
                     }`}
                   >
-                    ② SKU工作台 (
+                    ① 主图/SKU (
                     {
                       generationRecords.filter(
                         (r) => r.sourceStudio === 'sku_studio'
+                      ).length
+                    }
+                    )
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRecordSourceFilter('detail_studio')}
+                    className={`px-2.5 py-0.5 rounded-[5px] text-[11px] transition-all cursor-pointer font-mono-tabular ${
+                      recordSourceFilter === 'detail_studio'
+                        ? 'macos-segmented-thumb-active'
+                        : 'text-slate-600 hover:text-slate-900 font-medium'
+                    }`}
+                  >
+                    ② 详情页 (
+                    {
+                      generationRecords.filter(
+                        (r) => r.sourceStudio === 'detail_studio'
                       ).length
                     }
                     )
@@ -1788,10 +1790,18 @@ export const MasterLibraryView: React.FC<MasterLibraryViewProps> = ({
                     暂无符合筛选条件的生成记录
                   </h3>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    在「① 详情页工作台」或「② SKU图工作台」生成的成品图会自动归档至此。
+                    在「① 主图/SKU工作台」或「② 详情页工作台」生成的成品图会自动归档至此。
                   </p>
                 </div>
                 <div className="flex items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={onSwitchToSkuStudio}
+                    className="btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Palette className="w-3.5 h-3.5" />
+                    <span>前往主图/SKU工作台</span>
+                  </button>
                   <button
                     type="button"
                     onClick={onSwitchToDetailStudio}
@@ -1799,14 +1809,6 @@ export const MasterLibraryView: React.FC<MasterLibraryViewProps> = ({
                   >
                     <LayoutList className="w-3.5 h-3.5" />
                     <span>前往详情页工作台</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onSwitchToSkuStudio}
-                    className="btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Palette className="w-3.5 h-3.5" />
-                    <span>前往SKU图工作台</span>
                   </button>
                 </div>
               </div>

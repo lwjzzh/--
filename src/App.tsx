@@ -425,8 +425,29 @@ function reindexReferenceCodes(
 }
 
 export default function App() {
-  const [activeTopTab, setActiveTopTab] =
-    useState<WorkspaceTopTab>('detail_studio');
+  const [activeTopTab, setActiveTopTab] = useState<WorkspaceTopTab>(() => {
+    try {
+      const saved = localStorage.getItem('ecom_studio_last_active_tab_v1');
+      if (
+        saved === 'sku_studio' ||
+        saved === 'detail_studio' ||
+        saved === 'master_library'
+      ) {
+        return saved;
+      }
+    } catch {
+      // Ignore storage error
+    }
+    return 'sku_studio';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ecom_studio_last_active_tab_v1', activeTopTab);
+    } catch {
+      // Ignore storage error
+    }
+  }, [activeTopTab]);
   const [oversizedQueue, setOversizedQueue] = useState<
     OversizedImageCandidate[]
   >([]);
@@ -4573,6 +4594,14 @@ export default function App() {
         moduleType: task.moduleType || 'selling_point',
         userNote: task.userNote || '',
         sourceReplicaImageUrl: task.sourceReplicaImageUrl,
+        lockedResultImageUrl:
+          task.lockResultAsRef && task.resultImageUrl
+            ? task.resultImageUrl
+            : undefined,
+        refineInstruction:
+          task.lockResultAsRef && task.refineInstruction
+            ? task.refineInstruction
+            : undefined,
         printThemeConfig: task.printThemeConfig,
         customConstraints,
         studioContext: 'detail',
@@ -4615,6 +4644,20 @@ export default function App() {
       setTasks((prev) =>
         prev.map((t) => {
           if (t.id !== task.id) return t;
+          const seededHistory =
+            t.historyImages.length === 0 && t.resultImageUrl
+              ? [
+                  {
+                    url: t.resultImageUrl,
+                    ossUrl: t.resultOssUrl,
+                    cloudUrls: t.resultCloudUrls,
+                    timestamp: t.generatedAt || '初版',
+                    promptSnapshot: t.visualPrompt,
+                    aspectRatio: t.aspectRatio,
+                    imageSize: t.imageSize,
+                  },
+                ]
+              : t.historyImages;
           const nextHistory = [
             {
               url: data.imageUrl,
@@ -4627,8 +4670,8 @@ export default function App() {
               aspectRatio: t.aspectRatio,
               imageSize: t.imageSize,
             },
-            ...t.historyImages,
-          ].slice(0, 6);
+            ...seededHistory.filter((h) => h.url !== data.imageUrl),
+          ].slice(0, 8);
 
           return {
             ...t,
@@ -6133,6 +6176,14 @@ export default function App() {
           (skuBatchConfig.consistentOutputStyle !== false),
         styleLinkageMode: effectiveLinkageMode,
         printThemeConfig: activeTask.printThemeConfig,
+        lockedResultImageUrl:
+          activeTask.lockResultAsRef && activeTask.resultImageUrl
+            ? activeTask.resultImageUrl
+            : undefined,
+        refineInstruction:
+          activeTask.lockResultAsRef && activeTask.refineInstruction
+            ? activeTask.refineInstruction
+            : undefined,
         replicaLanguage:
           activeTask.replicaLanguage || skuBatchConfig.replicaLanguage || 'zh',
         globalRequirement: skuBatchConfig.referenceInfoText,
@@ -6176,6 +6227,20 @@ export default function App() {
       setSkuTasks((prev) =>
         prev.map((t) => {
           if (t.id !== activeTask.id) return t;
+          const seededHistory =
+            t.historyImages.length === 0 && t.resultImageUrl
+              ? [
+                  {
+                    url: t.resultImageUrl,
+                    ossUrl: t.resultOssUrl,
+                    cloudUrls: t.resultCloudUrls,
+                    timestamp: t.generatedAt || '初版',
+                    promptSnapshot: t.visualPrompt,
+                    aspectRatio: t.aspectRatio,
+                    imageSize: t.imageSize,
+                  },
+                ]
+              : t.historyImages;
           const nextHistory = [
             {
               url: data.imageUrl,
@@ -6188,8 +6253,8 @@ export default function App() {
               aspectRatio: t.aspectRatio,
               imageSize: t.imageSize,
             },
-            ...t.historyImages,
-          ].slice(0, 6);
+            ...seededHistory.filter((h) => h.url !== data.imageUrl),
+          ].slice(0, 8);
 
           return {
             ...t,
@@ -6417,6 +6482,9 @@ export default function App() {
           status: existing?.resultImageUrl && !autoStartRender ? 'completed' : 'idle',
           resultImageUrl: existing?.resultImageUrl,
           resultOssUrl: existing?.resultOssUrl,
+          resultCloudUrls: existing?.resultCloudUrls,
+          lockResultAsRef: existing?.lockResultAsRef,
+          refineInstruction: existing?.refineInstruction,
           historyImages: existing?.historyImages || [],
         };
       }
@@ -6672,6 +6740,9 @@ export default function App() {
         status: 'idle',
         resultImageUrl: undefined,
         resultOssUrl: undefined,
+        resultCloudUrls: undefined,
+        lockResultAsRef: false,
+        refineInstruction: '',
         historyImages: [],
       };
       const next = [...prev];
@@ -8543,7 +8614,7 @@ export default function App() {
     showToast(
       `已从资产库导入 ${newRefs.length} 张${
         category === 'case' ? '参考案例图 (#Case)' : '产品图片 (#Prod)'
-      }至「① 详情页工作台」`,
+      }至「② 详情页工作台」`,
       'success'
     );
   };
@@ -8681,7 +8752,7 @@ export default function App() {
     setActiveTopTab(targetStudio);
     showToast(
       `已将 ${newRefs.length} 张常用素材推送至「${
-        targetStudio === 'sku_studio' ? '② SKU图工作台' : '① 详情页工作台'
+        targetStudio === 'sku_studio' ? '① 主图/SKU工作台' : '② 详情页工作台'
       }」独立素材池`,
       'success'
     );
@@ -9490,7 +9561,7 @@ export default function App() {
             setLightboxImage({
               url,
               title: title || '主图/SKU参考图或成图预览',
-              subtitle: subtitle || '② 主图/SKU工作台',
+              subtitle: subtitle || '① 主图/SKU工作台',
             })
           }
           onShowToast={showToast}
@@ -9499,6 +9570,16 @@ export default function App() {
           onUpdateSkuProdRole={handleUpdateSkuProdRole}
           onFissionTaskToOtherProds={handleFissionTaskToOtherProds}
           onBuildStandardFiveMainCards={handleBuildStandardFiveMainCards}
+          sellingPointPresets={
+            config.defaultSellingPointPresets &&
+            config.defaultSellingPointPresets.length > 0
+              ? config.defaultSellingPointPresets
+              : DEFAULT_SKU_SELLING_POINT_PRESETS
+          }
+          onOpenPresetSettings={() => {
+            setApiConfigTab('presets_fallback');
+            setShowApiModal(true);
+          }}
         />
       ) : activeTopTab === 'master_library' ? (
         <MasterLibraryView
@@ -9652,13 +9733,24 @@ export default function App() {
             setLightboxImage({
               url,
               title: title || '详情页模块预览',
-              subtitle: subtitle || '① 详情页工作台',
+              subtitle: subtitle || '② 详情页工作台',
             })
           }
           onUpdateDetailProdRole={handleUpdateDetailProdRole}
           onUpdateDetailAssetTag={handleUpdateDetailAssetTag}
           onAutoAnalyzeDetailRefs={handleAutoAnalyzeReferenceTags}
           onSyncFromSkuStudio={handleSyncFromSkuStudioToDetail}
+          sellingPointPresets={
+            config.defaultSellingPointPresets &&
+            config.defaultSellingPointPresets.length > 0
+              ? config.defaultSellingPointPresets
+              : DEFAULT_SKU_SELLING_POINT_PRESETS
+          }
+          onOpenPresetSettings={() => {
+            setApiConfigTab('presets_fallback');
+            setShowApiModal(true);
+          }}
+          onShowToast={showToast}
         />
       )}
 

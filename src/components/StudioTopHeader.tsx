@@ -588,34 +588,6 @@ export const StudioTopHeader: React.FC<StudioTopHeaderProps> = ({
       >
         <button
           type="button"
-          onClick={() => onSelectTopTab('detail_studio')}
-          className={`h-7 px-3 text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-            activeTopTab === 'detail_studio'
-              ? 'bg-white text-slate-900 font-semibold shadow-xs ring-1 ring-slate-900/5'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-white/50 font-medium'
-          }`}
-        >
-          <LayoutList
-            className={`w-3.5 h-3.5 ${
-              activeTopTab === 'detail_studio'
-                ? 'text-blue-600'
-                : 'text-slate-400'
-            }`}
-          />
-          <span>① 详情页工作台</span>
-          <span
-            className={`px-1.5 py-0.5 rounded-md font-mono-tabular text-[10px] font-semibold transition-colors ${
-              activeTopTab === 'detail_studio'
-                ? 'bg-blue-50 text-blue-600'
-                : 'bg-slate-200/70 text-slate-500'
-            }`}
-          >
-            {tasks.length}
-          </span>
-        </button>
-
-        <button
-          type="button"
           onClick={() => onSelectTopTab('sku_studio')}
           className={`h-7 px-3 text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
             activeTopTab === 'sku_studio'
@@ -630,7 +602,7 @@ export const StudioTopHeader: React.FC<StudioTopHeaderProps> = ({
                 : 'text-slate-400'
             }`}
           />
-          <span>② 主图/SKU工作台</span>
+          <span>① 主图/SKU工作台</span>
           <span
             className={`px-1.5 py-0.5 rounded-md font-mono-tabular text-[10px] font-semibold transition-colors ${
               activeTopTab === 'sku_studio'
@@ -639,6 +611,34 @@ export const StudioTopHeader: React.FC<StudioTopHeaderProps> = ({
             }`}
           >
             {skuTasks.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onSelectTopTab('detail_studio')}
+          className={`h-7 px-3 text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+            activeTopTab === 'detail_studio'
+              ? 'bg-white text-slate-900 font-semibold shadow-xs ring-1 ring-slate-900/5'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-white/50 font-medium'
+          }`}
+        >
+          <LayoutList
+            className={`w-3.5 h-3.5 ${
+              activeTopTab === 'detail_studio'
+                ? 'text-blue-600'
+                : 'text-slate-400'
+            }`}
+          />
+          <span>② 详情页工作台</span>
+          <span
+            className={`px-1.5 py-0.5 rounded-md font-mono-tabular text-[10px] font-semibold transition-colors ${
+              activeTopTab === 'detail_studio'
+                ? 'bg-blue-50 text-blue-600'
+                : 'bg-slate-200/70 text-slate-500'
+            }`}
+          >
+            {tasks.length}
           </span>
         </button>
 

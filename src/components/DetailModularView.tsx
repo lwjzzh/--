@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -28,6 +28,11 @@ import {
   ChevronDown,
   ChevronUp,
   ArrowRightLeft,
+  Lock,
+  Unlock,
+  History,
+  Settings,
+  Zap,
 } from 'lucide-react';
 import {
   ReferenceImageItem,
@@ -35,6 +40,7 @@ import {
   ImageSizeOption,
   CloudStorageProvider,
   ScreenTask,
+  SkuSellingPointPreset,
   DetailModuleType,
   DETAIL_MODULE_PRESETS,
   TextRenderMode,
@@ -221,6 +227,9 @@ export interface DetailModularViewProps {
   onUpdateDetailAssetTag?: (refId: string, newTag: string) => void;
   onAutoAnalyzeDetailRefs?: () => void;
   onSyncFromSkuStudio?: () => void;
+  sellingPointPresets?: SkuSellingPointPreset[];
+  onOpenPresetSettings?: () => void;
+  onShowToast?: (text: string, type?: 'info' | 'success' | 'error') => void;
 }
 
 export const DetailModularView: React.FC<DetailModularViewProps> = ({
@@ -275,6 +284,9 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
   onUpdateDetailAssetTag,
   onAutoAnalyzeDetailRefs,
   onSyncFromSkuStudio,
+  sellingPointPresets = [],
+  onOpenPresetSettings,
+  onShowToast,
 }) => {
   const isR2 = storageProvider === 'cloudflare_r2';
   const cloudShort = isR2 ? 'R2' : 'OSS';
@@ -285,6 +297,19 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
   const [rightViewMode, setRightViewMode] = useState<'cards' | 'long_preview'>(
     'cards'
   );
+  const [showPresetMenu, setShowPresetMenu] = useState(false);
+
+  useEffect(() => {
+    if (!showPresetMenu) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && !target.closest('[data-detail-preset-menu-root="true"]')) {
+        setShowPresetMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [showPresetMenu]);
   const [expandedThemeTaskIds, setExpandedThemeTaskIds] = useState<string[]>(
     []
   );
@@ -588,19 +613,100 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
 
             {/* Product Selling Points & Parameters Input */}
             <div className="space-y-1.5 pt-1">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-1 relative">
                 <span className="text-xs font-semibold text-slate-700">
                   产品卖点、规格参数与售后信息
                 </span>
-                {productInfoText && (
-                  <button
-                    type="button"
-                    onClick={() => onChangeProductInfoText('')}
-                    className="text-[11px] text-slate-400 hover:text-rose-600 cursor-pointer"
-                  >
-                    清空
-                  </button>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {sellingPointPresets.length > 0 && (
+                    <div className="relative" data-detail-preset-menu-root="true">
+                      <button
+                        type="button"
+                        onClick={() => setShowPresetMenu((prev) => !prev)}
+                        className="h-6 px-2 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                        title="从防丢常用卖点库一键填入产品核心卖点与参数"
+                      >
+                        <Zap className="w-3 h-3 text-amber-600" />
+                        <span>常用卖点 ({sellingPointPresets.length})</span>
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+
+                      {showPresetMenu && (
+                        <div className="absolute right-0 top-full mt-1.5 w-72 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-40 space-y-1">
+                          <div className="flex items-center justify-between px-2 py-1 border-b border-slate-100">
+                            <span className="text-[11px] font-bold text-slate-800">
+                              ⚡ 一键填入常用卖点方案
+                            </span>
+                            {onOpenPresetSettings && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowPresetMenu(false);
+                                  onOpenPresetSettings();
+                                }}
+                                className="text-[10px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5 cursor-pointer"
+                              >
+                                <Settings className="w-2.5 h-2.5" />
+                                <span>管理方案库</span>
+                              </button>
+                            )}
+                          </div>
+                          <div className="max-h-52 overflow-y-auto space-y-1 py-0.5">
+                            {sellingPointPresets.map((preset) => (
+                              <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() => {
+                                  const lines = [
+                                    preset.titlePrefix
+                                      ? `产品系列：${preset.titlePrefix}${preset.subtitleText ? ` · ${preset.subtitleText}` : ''}`
+                                      : '',
+                                    `核心卖点：${preset.sellingPointBadge}`,
+                                    preset.packageSpecNote
+                                      ? `包装与参数：${preset.packageSpecNote}`
+                                      : '',
+                                  ]
+                                    .filter(Boolean)
+                                    .join('\n');
+                                  const nextVal = productInfoText.trim()
+                                    ? `${productInfoText.trim()}\n${lines}`
+                                    : lines;
+                                  onChangeProductInfoText(nextVal);
+                                  setShowPresetMenu(false);
+                                  onShowToast?.(
+                                    `已填入常用卖点方案「${preset.label}」`,
+                                    'success'
+                                  );
+                                }}
+                                className="w-full text-left p-2 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-200/80 transition-all cursor-pointer"
+                              >
+                                <div className="text-xs font-bold text-slate-900 truncate">
+                                  {preset.label}
+                                </div>
+                                <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                                  {preset.sellingPointBadge}
+                                  {preset.packageSpecNote
+                                    ? ` · ${preset.packageSpecNote}`
+                                    : ''}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {productInfoText && (
+                    <button
+                      type="button"
+                      onClick={() => onChangeProductInfoText('')}
+                      className="text-[11px] text-slate-400 hover:text-rose-600 cursor-pointer"
+                    >
+                      清空
+                    </button>
+                  )}
+                </div>
               </div>
               <textarea
                 rows={3}
@@ -1036,7 +1142,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                       像搭积木一样自由添加详情页分屏模块，全套共享统一视觉规范与印花4维联动
                     </h3>
                     <p className="text-xs text-slate-500">
-                      生图阶段不再逐屏塞入竞品参考图，彻底解决产品变形与画面撕裂问题。可从「② 主图工作台」一键延展 5 张主图并追加收尾 3 屏，或直接加载标准 7 屏模板。
+                      生图阶段不再逐屏塞入竞品参考图，彻底解决产品变形与画面撕裂问题。可从「① 主图工作台」一键延展 5 张主图并追加收尾 3 屏，或直接加载标准 7 屏模板。
                     </p>
                   </div>
 
@@ -1665,9 +1771,15 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Right 4 Cols: Rendered Image Preview & Action */}
+                    {/* Right 4 Cols: Rendered Image Preview, History Version Strip & Lock-Result Refinement */}
                     <div className="lg:col-span-4 flex flex-col justify-between gap-2 bg-slate-50/80 border border-slate-200/70 rounded-xl p-3">
-                      <div className="relative flex-1 min-h-[220px] rounded-lg overflow-hidden bg-white border border-slate-200 flex items-center justify-center group">
+                      <div
+                        className={`relative flex-1 min-h-[220px] rounded-lg overflow-hidden bg-white border ${
+                          task.lockResultAsRef && task.resultImageUrl
+                            ? 'border-amber-400 ring-2 ring-amber-400/25'
+                            : 'border-slate-200'
+                        } flex items-center justify-center group`}
+                      >
                         {isGenerating ? (
                           <div className="flex flex-col items-center gap-2 text-xs text-slate-500">
                             <Loader2 className="w-6 h-6 animate-spin text-slate-900" />
@@ -1687,6 +1799,12 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                               }
                               className="w-full h-full max-h-[280px] object-contain cursor-zoom-in"
                             />
+                            {task.lockResultAsRef && (
+                              <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-amber-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-xs">
+                                <Lock className="w-2.5 h-2.5" />
+                                <span>已锁此成图为微调基准</span>
+                              </span>
+                            )}
                             <div className="absolute bottom-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 type="button"
@@ -1731,21 +1849,119 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                         )}
                       </div>
 
-                      <button
-                        type="button"
-                        disabled={isGenerating}
-                        onClick={() => onGenerateSingleTask(task)}
-                        className="w-full h-8 rounded-lg bg-slate-900 hover:bg-black text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      >
-                        {isGenerating ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <RefreshCw className="w-3.5 h-3.5" />
+                      {/* Non-destructive History Version Strip (v1 / v2 / v3...) */}
+                      {task.historyImages && task.historyImages.length > 0 && (
+                        <div className="flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg bg-white border border-slate-200/80">
+                          <span className="text-[10px] font-semibold text-slate-500 flex items-center gap-1 shrink-0">
+                            <History className="w-3 h-3 text-slate-400" />
+                            <span>历史版 ({task.historyImages.length}):</span>
+                          </span>
+                          <div className="flex items-center gap-1 overflow-x-auto">
+                            {[...task.historyImages]
+                              .reverse()
+                              .map((hItem, vIdx) => {
+                                const isCurrentVersion =
+                                  task.resultImageUrl === hItem.url;
+                                return (
+                                  <button
+                                    key={`${task.id}-dhist-${vIdx}-${hItem.timestamp}`}
+                                    type="button"
+                                    onClick={() => {
+                                      onUpdateTask(task.id, {
+                                        resultImageUrl: hItem.url,
+                                        resultOssUrl: hItem.ossUrl,
+                                        resultCloudUrls: hItem.cloudUrls,
+                                        status: 'completed',
+                                      });
+                                      onShowToast?.(
+                                        `已切换第 ${idx + 1} 屏至 v${vIdx + 1} 版本（${hItem.timestamp}）`,
+                                        'info'
+                                      );
+                                    }}
+                                    title={`点击切换至 v${vIdx + 1} (${hItem.timestamp})`}
+                                    className={`h-6 pl-1 pr-1.5 rounded-md text-[10px] font-mono-tabular font-bold flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
+                                      isCurrentVersion
+                                        ? 'bg-slate-900 text-white shadow-2xs ring-1 ring-slate-900'
+                                        : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <img
+                                      src={hItem.url}
+                                      alt={`v${vIdx + 1}`}
+                                      className="w-4 h-4 rounded-xs object-cover"
+                                    />
+                                    <span>v{vIdx + 1}</span>
+                                  </button>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 🔒 Lock Current Result for Local Refinement Input */}
+                      {task.resultImageUrl && task.lockResultAsRef && (
+                        <input
+                          type="text"
+                          value={task.refineInstruction || ''}
+                          onChange={(e) =>
+                            onUpdateTask(task.id, {
+                              refineInstruction: e.target.value,
+                            })
+                          }
+                          placeholder="🔒 局部微调指令（如：保持构图，把标题改成亮黄、减少底部小元素）..."
+                          className="w-full h-7 px-2 text-[11px] bg-amber-50/90 border border-amber-300 rounded-lg focus:bg-white focus:outline-none focus:border-amber-600 text-slate-900 placeholder:text-amber-700/70"
+                        />
+                      )}
+
+                      <div className="flex items-center gap-1.5">
+                        {task.resultImageUrl && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onUpdateTask(task.id, {
+                                lockResultAsRef: !task.lockResultAsRef,
+                              })
+                            }
+                            title="开启后将以当前满意成图为构图基准，仅对文案或局部元素做定点微调重绘"
+                            className={`h-8 px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
+                              task.lockResultAsRef
+                                ? 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {task.lockResultAsRef ? (
+                              <Lock className="w-3.5 h-3.5" />
+                            ) : (
+                              <Unlock className="w-3.5 h-3.5" />
+                            )}
+                            <span>锁图微调</span>
+                          </button>
                         )}
-                        <span>
-                          {task.resultImageUrl ? '重新生成本屏' : '立即生成本屏'}
-                        </span>
-                      </button>
+
+                        <button
+                          type="button"
+                          disabled={isGenerating}
+                          onClick={() => onGenerateSingleTask(task)}
+                          className={`flex-1 h-8 rounded-lg text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                            task.lockResultAsRef && task.resultImageUrl
+                              ? 'bg-amber-600 hover:bg-amber-700'
+                              : 'bg-slate-900 hover:bg-black'
+                          }`}
+                        >
+                          {isGenerating ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            {task.resultImageUrl
+                              ? task.lockResultAsRef
+                                ? '🔒 锁图微调本屏'
+                                : '重新生成本屏'
+                              : '立即生成本屏'}
+                          </span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );

@@ -949,6 +949,8 @@ export const studioBridge = {
     styleLinkageMode?: StyleLinkageMode;
     printThemeConfig?: PrintThemeLinkageConfig;
     sourceReplicaImageUrl?: string;
+    lockedResultImageUrl?: string;
+    refineInstruction?: string;
     singleRequirement?: string;
     perRefRequirement?: string;
     unifiedRequirement?: string;
