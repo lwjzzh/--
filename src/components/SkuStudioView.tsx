@@ -334,6 +334,8 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
   const [urlInputText, setUrlInputText] = useState('');
   const [isImportingUrl, setIsImportingUrl] = useState(false);
   const [showPerRefRules, setShowPerRefRules] = useState(false);
+  const [isCaseGridExpanded, setIsCaseGridExpanded] = useState(false);
+  const [isProdGridExpanded, setIsProdGridExpanded] = useState(false);
   const [hoveredFidelity, setHoveredFidelity] = useState<ReplicaFidelity | null>(
     null
   );
@@ -641,7 +643,11 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                 e.preventDefault();
                 onUploadFiles(e.dataTransfer.files, 'case');
               }}
-              className="grid grid-cols-4 gap-2"
+              className={`grid grid-cols-4 gap-2 ${
+                !isCaseGridExpanded && caseAssets.length >= 8
+                  ? 'max-h-[168px] overflow-y-auto pr-1'
+                  : ''
+              }`}
             >
               {caseAssets.map((ref, idx) => (
                 <div
@@ -688,6 +694,24 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                 <span className="text-[10px] font-medium">添加参考图</span>
               </button>
             </div>
+            {caseAssets.length >= 8 && (
+              <button
+                type="button"
+                onClick={() => setIsCaseGridExpanded((prev) => !prev)}
+                className="w-full py-1 text-[11px] font-medium text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 rounded-lg flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <span>
+                  {isCaseGridExpanded
+                    ? '收起参考图列表'
+                    : `展开全部 ${caseAssets.length} 张参考图`}
+                </span>
+                {isCaseGridExpanded ? (
+                  <ChevronUp className="w-3 h-3" />
+                ) : (
+                  <ChevronDown className="w-3 h-3" />
+                )}
+              </button>
+            )}
 
             {/* Collapsible Per-Image Reference Requirements (单张参考要求) */}
             {caseAssets.length > 0 && (
@@ -792,80 +816,107 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                 e.preventDefault();
                 onUploadFiles(e.dataTransfer.files, 'product');
               }}
-              className="grid grid-cols-4 gap-2"
+              className={`grid grid-cols-4 gap-2 ${
+                !isProdGridExpanded && prodAssets.length > 8
+                  ? 'max-h-[210px] overflow-y-auto pr-1'
+                  : ''
+              }`}
             >
-              {prodAssets.map((prod, idx) => (
-                <div
-                  key={prod.id}
-                  className="flex flex-col gap-1"
-                >
-                  <div
-                    onClick={() =>
-                      onPreviewImage(
-                        prod.previewUrl,
-                        `产品原图 ${idx + 1} (${prod.tag})`,
-                        prod.name
-                      )
-                    }
-                    className="relative aspect-square rounded-xl overflow-hidden bg-slate-100 border border-slate-200/80 group cursor-zoom-in"
-                  >
-                    <img
-                      src={prod.previewUrl}
-                      alt={prod.tag}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover"
-                    />
-                    {/* Angle Role Selector Badge */}
+              {prodAssets.map((prod, idx) => {
+                const roleVal = prod.prodAngleRole || 'hero_front';
+                const isSpecialRole = roleVal !== 'hero_front';
+                const roleBadgeColor =
+                  roleVal === 'open_case'
+                    ? 'bg-blue-600/90 text-white'
+                    : roleVal === 'single_earbud'
+                      ? 'bg-emerald-600/90 text-white'
+                      : roleVal === 'detail_closeup'
+                        ? 'bg-amber-600/90 text-white'
+                        : roleVal === 'multi_sku'
+                          ? 'bg-purple-600/90 text-white'
+                          : roleVal === 'package_accessory'
+                            ? 'bg-teal-600/90 text-white'
+                            : 'bg-slate-900/85 text-white';
+
+                return (
+                  <div key={prod.id} className="flex flex-col gap-1">
                     <div
-                      onClick={(e) => e.stopPropagation()}
-                      className="absolute top-1 left-1 z-10"
+                      onClick={() =>
+                        onPreviewImage(
+                          prod.previewUrl,
+                          `产品原图 #${prod.code || `P${idx + 1}`} (${prod.tag})`,
+                          prod.name
+                        )
+                      }
+                      className="relative aspect-square rounded-xl overflow-hidden bg-slate-100 border border-slate-200/80 group cursor-zoom-in"
                     >
-                      <select
-                        value={prod.prodAngleRole || 'hero_front'}
-                        onChange={(e) =>
-                          onUpdateSkuProdRole?.(
-                            prod.id,
-                            e.target.value as ProductAngleRole
-                          )
-                        }
-                        title="标记该产品图的视角角色，AI排卡时将按画面需求自动组合多角度产品图"
-                        className="h-4.5 px-1 rounded bg-slate-900/85 text-white text-[9px] font-medium focus:outline-none cursor-pointer border border-white/20"
+                      <img
+                        src={prod.previewUrl}
+                        alt={prod.tag}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                      {/* Clean Index Anchor Badge */}
+                      <span className="absolute top-1 left-1 bg-slate-900/75 text-white text-[9px] font-mono-tabular font-semibold px-1 py-0.5 rounded pointer-events-none">
+                        #{prod.code || `P${idx + 1}`}
+                      </span>
+
+                      {/* Angle Role Selector: Hidden by default for standard 'hero_front' to avoid visual clutter; always visible when set to a special angle or on hover */}
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className={`absolute bottom-0 inset-x-0 z-10 transition-opacity ${
+                          isSpecialRole
+                            ? 'opacity-100'
+                            : 'opacity-0 group-hover:opacity-100'
+                        }`}
                       >
-                        {PROD_ANGLE_ROLE_OPTIONS.map((opt) => (
-                          <option
-                            key={opt.value}
-                            value={opt.value}
-                            className="bg-slate-900 text-white"
-                          >
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
+                        <select
+                          value={roleVal}
+                          onChange={(e) =>
+                            onUpdateSkuProdRole?.(
+                              prod.id,
+                              e.target.value as ProductAngleRole
+                            )
+                          }
+                          title="点击切换该产品图的拍摄视角角色（默认正面主视自动隐藏，悬停可改）"
+                          className={`w-full py-0.5 px-1 text-[9px] text-center font-medium focus:outline-none cursor-pointer ${roleBadgeColor}`}
+                        >
+                          {PROD_ANGLE_ROLE_OPTIONS.map((opt) => (
+                            <option
+                              key={opt.value}
+                              value={opt.value}
+                              className="bg-slate-900 text-white"
+                            >
+                              {opt.shortLabel || opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveSkuAsset(prod.id);
+                        }}
+                        className="absolute top-1 right-1 w-4.5 h-4.5 rounded-full bg-slate-900/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-opacity cursor-pointer"
+                        title="移除此产品图"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRemoveSkuAsset(prod.id);
-                      }}
-                      className="absolute top-1 right-1 w-4.5 h-4.5 rounded-full bg-slate-900/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-opacity cursor-pointer"
-                      title="移除此产品图"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
+                    <input
+                      type="text"
+                      value={prod.tag || ''}
+                      onChange={(e) =>
+                        onUpdateSkuAssetTag?.(prod.id, e.target.value)
+                      }
+                      placeholder={`款式/视角 ${idx + 1}`}
+                      title="可编辑花色名或视角备注（如：太空芝士鼠·正面）"
+                      className="w-full h-5.5 px-1.5 text-[10px] text-slate-700 bg-slate-50 border border-slate-200/80 rounded-md focus:bg-white focus:outline-none focus:border-slate-900 truncate"
+                    />
                   </div>
-                  <input
-                    type="text"
-                    value={prod.tag || ''}
-                    onChange={(e) =>
-                      onUpdateSkuAssetTag?.(prod.id, e.target.value)
-                    }
-                    placeholder={`款式/视角 ${idx + 1}`}
-                    title="可编辑花色名或视角备注（如：太空芝士鼠·正面）"
-                    className="w-full h-5.5 px-1.5 text-[10px] text-slate-700 bg-slate-50 border border-slate-200/80 rounded-md focus:bg-white focus:outline-none focus:border-slate-900 truncate"
-                  />
-                </div>
-              ))}
+                );
+              })}
 
               <button
                 type="button"
@@ -877,6 +928,25 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                 <span className="text-[10px] font-medium">添加产品图</span>
               </button>
             </div>
+
+            {prodAssets.length > 8 && (
+              <button
+                type="button"
+                onClick={() => setIsProdGridExpanded((prev) => !prev)}
+                className="w-full py-1 text-[11px] font-medium text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
+              >
+                <span>
+                  {isProdGridExpanded
+                    ? `收起产品图网格 (保持下方策略常驻)`
+                    : `展开全部 ${prodAssets.length} 张产品图 (当前紧凑滚动)`}
+                </span>
+                {isProdGridExpanded ? (
+                  <ChevronUp className="w-3 h-3" />
+                ) : (
+                  <ChevronDown className="w-3 h-3" />
+                )}
+              </button>
+            )}
 
             {/* Upgraded Dual Pairing Mode Selector (同款多角度套图 vs 多花色SKU裂变) */}
             <div className="space-y-1.5 pt-0.5">
@@ -2301,37 +2371,51 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                                     : '全选全家福'}
                                 </button>
                               </div>
-                              <div className="flex flex-wrap gap-1 max-h-14 overflow-y-auto">
+                              <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto pr-0.5">
                                 {prodAssets.map((p, pIdx) => {
                                   const isSelected = effectiveBoundProds.some(
                                     (bp) => bp.id === p.id
                                   );
-                                  const roleLabel =
+                                  const roleOption =
                                     PROD_ANGLE_ROLE_OPTIONS.find(
                                       (o) => o.value === p.prodAngleRole
-                                    )?.label || '';
+                                    );
+                                  const isSpecialAngle =
+                                    p.prodAngleRole &&
+                                    p.prodAngleRole !== 'hero_front';
+                                  const cleanTag = (p.tag || p.name || '')
+                                    .replace(/\.(png|jpe?g|webp)$/i, '')
+                                    .replace(/^(TWS\d+[-_]?)/i, '')
+                                    .trim();
+                                  const shortText =
+                                    cleanTag ||
+                                    (isSpecialAngle
+                                      ? roleOption?.shortLabel
+                                      : '') ||
+                                    `P${pIdx + 1}`;
                                   return (
                                     <button
                                       key={p.id}
                                       type="button"
                                       onClick={() => toggleCardProdRef(p.id)}
-                                      title={`${p.tag || `商品${pIdx + 1}`}${roleLabel ? ` · ${roleLabel}` : ''}（点击可多选组合）`}
+                                      title={`#${p.code || `P${pIdx + 1}`} ${p.tag || `商品${pIdx + 1}`}${roleOption ? ` · ${roleOption.label}` : ''}（点击可多选组合）`}
                                       className={`h-6 pl-1 pr-1.5 rounded-md border text-[10px] flex items-center gap-1 transition-all cursor-pointer ${
                                         isSelected
-                                          ? 'border-blue-600 bg-blue-50 text-blue-700 font-semibold'
-                                          : 'border-slate-200 bg-white text-slate-500 opacity-65 hover:opacity-100'
+                                          ? 'border-blue-600 bg-blue-50 text-blue-700 font-semibold shadow-2xs'
+                                          : 'border-slate-200 bg-white text-slate-600 opacity-75 hover:opacity-100 hover:border-slate-300'
                                       }`}
                                     >
                                       <img
                                         src={p.previewUrl}
                                         alt={p.tag}
                                         referrerPolicy="no-referrer"
-                                        className="w-4 h-4 rounded-xs object-cover"
+                                        className="w-4 h-4 rounded-xs object-cover shrink-0"
                                       />
-                                      <span className="truncate max-w-[60px]">
-                                        {roleLabel
-                                          ? `${roleLabel.replace(/主图|特写|微距|合集/g, '')}`
-                                          : p.tag || `P${pIdx + 1}`}
+                                      <span className="font-mono-tabular text-[9px] opacity-75">
+                                        #{pIdx + 1}
+                                      </span>
+                                      <span className="truncate max-w-[68px]">
+                                        {shortText}
                                       </span>
                                     </button>
                                   );

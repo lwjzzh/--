@@ -388,6 +388,11 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
   const [expandedThemeTaskIds, setExpandedThemeTaskIds] = useState<string[]>(
     []
   );
+  const [expandedProdPickerTaskIds, setExpandedProdPickerTaskIds] = useState<
+    string[]
+  >([]);
+  const [isDetailProdGridExpanded, setIsDetailProdGridExpanded] =
+    useState(false);
   const [themeSeedCounter, setThemeSeedCounter] = useState<
     Record<string, number>
   >({});
@@ -511,17 +516,17 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
       <aside className="w-full lg:w-[405px] xl:w-[425px] shrink-0 lg:h-full bg-white border-b lg:border-b-0 lg:border-r border-slate-200/80 flex flex-col lg:overflow-hidden select-none">
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
           {/* 1. 自有产品图 (#Prod) 与 产品信息 */}
-          <section className="space-y-2.5">
+          <section className="space-y-2">
             <div className="flex items-center justify-between gap-1">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-[13px] font-bold text-slate-900 truncate">
                   1. 自有产品原图 (#Prod)
                 </span>
-                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-semibold shrink-0">
-                  纯产品锚定·零变形
+                <span className="text-[11px] text-slate-400 font-mono-tabular shrink-0">
+                  ({prodAssets.length}张)
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-2 shrink-0">
                 {onAutoAnalyzeDetailRefs && prodAssets.length > 0 && (
                   <button
                     type="button"
@@ -564,70 +569,79 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
               </div>
             </div>
 
-            {/* Secondary Asset Actions Bar (Moved from Top Toolbar to Left Asset Section) */}
+            {/* Single-Line Compact Cross-Workbench & Cloud Sync Bar */}
             {(prodAssets.length > 0 ||
               caseAssets.length > 0 ||
               skuProdCount > 0 ||
               skuTasksCount > 0) && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                {onSyncFromSkuStudio && (skuProdCount > 0 || skuTasksCount > 0) && (
-                  <div className="inline-flex items-center rounded-md border border-blue-200/80 bg-blue-50 overflow-hidden">
+              <div className="flex items-center justify-between gap-1.5 pt-0.5">
+                <div className="flex items-center gap-1 min-w-0">
+                  {onSyncFromSkuStudio &&
+                    (skuProdCount > 0 || skuTasksCount > 0) && (
+                      <div className="inline-flex items-center rounded-md border border-blue-200/80 bg-blue-50 overflow-hidden shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => onSyncFromSkuStudio()}
+                          title="仅同步主图工作台的产品原图(#Prod)至详情页素材池"
+                          className="h-6 px-2 hover:bg-blue-100 text-blue-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer border-r border-blue-200/80"
+                        >
+                          <ArrowRightLeft className="w-3 h-3" />
+                          <span>同步主图素材({skuProdCount})</span>
+                        </button>
+                        {skuTasksCount > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onSyncFromSkuStudio('9:16')}
+                              title="将主图工作台的卡片一键流转为 9:16 手机竖屏详情模块"
+                              className="h-6 px-1.5 hover:bg-blue-100 text-blue-700 text-[10px] font-bold cursor-pointer border-r border-blue-200/80"
+                            >
+                              转9:16
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onSyncFromSkuStudio('3:4')}
+                              title="将主图工作台的卡片一键流转为 3:4 电商详情模块"
+                              className="h-6 px-1.5 hover:bg-blue-100 text-blue-700 text-[10px] font-bold cursor-pointer"
+                            >
+                              转3:4
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                </div>
+
+                <div className="flex items-center gap-1 shrink-0">
+                  {(prodAssets.length > 0 || caseAssets.length > 0) && (
                     <button
                       type="button"
-                      onClick={() => onSyncFromSkuStudio()}
-                      title="仅同步主图工作台的产品原图(#Prod)至详情页素材池"
-                      className="h-6 px-2 hover:bg-blue-100 text-blue-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer border-r border-blue-200/80"
+                      onClick={onSaveDetailAssetsToLibrary}
+                      title="将当前产品图保存至本地常驻资产库"
+                      className="h-6 px-2 rounded-md bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-[11px] font-medium flex items-center gap-1 cursor-pointer"
                     >
-                      <ArrowRightLeft className="w-3 h-3" />
-                      <span>同步主图台素材 ({skuProdCount}张)</span>
+                      <BookmarkCheck className="w-3 h-3" />
+                      <span>存库</span>
                     </button>
-                    {skuTasksCount > 0 && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => onSyncFromSkuStudio('9:16')}
-                          title="将主图工作台的卡片一键流转为 9:16 手机竖屏详情模块"
-                          className="h-6 px-1.5 hover:bg-blue-100 text-blue-700 text-[10px] font-bold cursor-pointer border-r border-blue-200/80"
-                        >
-                          转9:16
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onSyncFromSkuStudio('3:4')}
-                          title="将主图工作台的卡片一键流转为 3:4 电商详情模块"
-                          className="h-6 px-1.5 hover:bg-blue-100 text-blue-700 text-[10px] font-bold cursor-pointer"
-                        >
-                          转3:4
-                        </button>
-                      </>
+                  )}
+                  {ossEnabled &&
+                    (prodAssets.length > 0 || caseAssets.length > 0) && (
+                      <button
+                        type="button"
+                        disabled={isSyncingOss}
+                        onClick={onSyncAllRefsToOss}
+                        title={`同步全部素材至 ${cloudShort} 云端存储`}
+                        className="h-6 px-2 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[11px] font-medium flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      >
+                        {isSyncingOss ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <CloudUpload className="w-3 h-3" />
+                        )}
+                        <span>{cloudShort}</span>
+                      </button>
                     )}
-                  </div>
-                )}
-                {(prodAssets.length > 0 || caseAssets.length > 0) && (
-                  <button
-                    type="button"
-                    onClick={onSaveDetailAssetsToLibrary}
-                    className="h-6 px-2 rounded-md bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-[11px] font-medium flex items-center gap-1 cursor-pointer"
-                  >
-                    <BookmarkCheck className="w-3 h-3" />
-                    <span>存至资产库</span>
-                  </button>
-                )}
-                {ossEnabled && (prodAssets.length > 0 || caseAssets.length > 0) && (
-                  <button
-                    type="button"
-                    disabled={isSyncingOss}
-                    onClick={onSyncAllRefsToOss}
-                    className="h-6 px-2 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[11px] font-medium flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                  >
-                    {isSyncingOss ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <CloudUpload className="w-3 h-3" />
-                    )}
-                    <span>同步 {cloudShort}</span>
-                  </button>
-                )}
+                </div>
               </div>
             )}
 
@@ -637,80 +651,110 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                 e.preventDefault();
                 onUploadFiles(e.dataTransfer.files, 'product');
               }}
-              className="grid grid-cols-4 gap-2"
+              className={`grid grid-cols-4 gap-2 ${
+                !isDetailProdGridExpanded && prodAssets.length > 8
+                  ? 'max-h-[210px] overflow-y-auto pr-1'
+                  : ''
+              }`}
             >
-              {prodAssets.map((prod, idx) => (
-                <div
-                  key={prod.id}
-                  className="flex flex-col gap-1 bg-slate-50/70 p-1 rounded-xl border border-slate-200/80"
-                >
-                  <div
-                    onClick={() =>
-                      onPreviewImage(
-                        prod.previewUrl,
-                        `产品图 #${prod.code} (${prod.tag})`,
-                        prod.name
-                      )
-                    }
-                    className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 group cursor-zoom-in"
-                  >
-                    <img
-                      src={prod.previewUrl}
-                      alt={prod.tag}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover"
-                    />
-                    <span className="absolute top-1 left-1 bg-slate-900/80 text-white text-[9px] font-mono-tabular px-1 py-0.5 rounded">
-                      #{prod.code || `P${idx + 1}`}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRemoveAsset(prod.id);
-                      }}
-                      className="absolute top-1 right-1 w-4 h-4 rounded-full bg-slate-900/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-opacity cursor-pointer"
-                      title="移除此产品图"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
+              {prodAssets.map((prod, idx) => {
+                const normRole = normalizeAngleRoleValue(prod.prodAngleRole);
+                const isSpecialRole = normRole !== 'hero_front';
+                const roleBadgeClass =
+                  normRole === 'open_case'
+                    ? 'bg-blue-600/90 text-white'
+                    : normRole === 'single_earbud'
+                      ? 'bg-emerald-600/90 text-white'
+                      : normRole === 'detail_closeup'
+                        ? 'bg-amber-600/90 text-white'
+                        : normRole === 'multi_sku'
+                          ? 'bg-purple-600/90 text-white'
+                          : normRole === 'package_accessory'
+                            ? 'bg-teal-600/90 text-white'
+                            : 'bg-slate-900/85 text-white';
 
-                    {/* Angle Role Selector */}
-                    {onUpdateDetailProdRole && (
-                      <select
-                        value={normalizeAngleRoleValue(prod.prodAngleRole)}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) =>
-                          onUpdateDetailProdRole(prod.id, e.target.value)
-                        }
-                        className="absolute bottom-0 inset-x-0 bg-slate-900/80 text-white text-[9px] py-0.5 px-1 text-center font-medium focus:outline-none cursor-pointer"
+                return (
+                  <div
+                    key={prod.id}
+                    className="flex flex-col gap-1 bg-slate-50/70 p-1 rounded-xl border border-slate-200/80"
+                  >
+                    <div
+                      onClick={() =>
+                        onPreviewImage(
+                          prod.previewUrl,
+                          `产品图 #${prod.code} (${prod.tag})`,
+                          prod.name
+                        )
+                      }
+                      className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 group cursor-zoom-in"
+                    >
+                      <img
+                        src={prod.previewUrl}
+                        alt={prod.tag}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                      <span className="absolute top-1 left-1 bg-slate-900/80 text-white text-[9px] font-mono-tabular px-1 py-0.5 rounded pointer-events-none">
+                        #{prod.code || `P${idx + 1}`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveAsset(prod.id);
+                        }}
+                        className="absolute top-1 right-1 w-4 h-4 rounded-full bg-slate-900/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-opacity cursor-pointer"
+                        title="移除此产品图"
                       >
-                        {PROD_ANGLE_ROLES.map((r) => (
-                          <option key={r.value} value={r.value}>
-                            {r.label}
-                          </option>
-                        ))}
-                      </select>
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+
+                      {/* Angle Role Selector: Hidden when default hero_front unless hovered; always visible for special roles */}
+                      {onUpdateDetailProdRole && (
+                        <select
+                          value={normRole}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) =>
+                            onUpdateDetailProdRole(prod.id, e.target.value)
+                          }
+                          title="点击切换该产品图视角角色（默认正面主视自动隐藏，悬停可改）"
+                          className={`absolute bottom-0 inset-x-0 text-[9px] py-0.5 px-1 text-center font-medium focus:outline-none cursor-pointer transition-opacity ${roleBadgeClass} ${
+                            isSpecialRole
+                              ? 'opacity-100'
+                              : 'opacity-0 group-hover:opacity-100'
+                          }`}
+                        >
+                          {PROD_ANGLE_ROLES.map((r) => (
+                            <option
+                              key={r.value}
+                              value={r.value}
+                              className="bg-slate-900 text-white"
+                            >
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    {onUpdateDetailAssetTag ? (
+                      <input
+                        type="text"
+                        value={prod.tag || ''}
+                        onChange={(e) =>
+                          onUpdateDetailAssetTag(prod.id, e.target.value)
+                        }
+                        placeholder="花色/视角..."
+                        className="w-full text-[10px] text-slate-700 bg-white border border-slate-200/80 rounded px-1 py-0.5 text-center truncate focus:outline-none focus:border-slate-900"
+                      />
+                    ) : (
+                      <span className="text-[10px] text-slate-600 text-center truncate px-0.5">
+                        {prod.tag || `产品${idx + 1}`}
+                      </span>
                     )}
                   </div>
-
-                  {onUpdateDetailAssetTag ? (
-                    <input
-                      type="text"
-                      value={prod.tag || ''}
-                      onChange={(e) =>
-                        onUpdateDetailAssetTag(prod.id, e.target.value)
-                      }
-                      placeholder="花色/视角..."
-                      className="w-full text-[10px] text-slate-700 bg-white border border-slate-200/80 rounded px-1 py-0.5 text-center truncate focus:outline-none focus:border-slate-900"
-                    />
-                  ) : (
-                    <span className="text-[10px] text-slate-600 text-center truncate px-0.5">
-                      {prod.tag || `产品${idx + 1}`}
-                    </span>
-                  )}
-                </div>
-              ))}
+                );
+              })}
 
               <button
                 type="button"
@@ -721,6 +765,25 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                 <span className="text-[10px] font-medium">添加产品图</span>
               </button>
             </div>
+
+            {prodAssets.length > 8 && (
+              <button
+                type="button"
+                onClick={() => setIsDetailProdGridExpanded((prev) => !prev)}
+                className="w-full py-1 text-[11px] font-medium text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
+              >
+                <span>
+                  {isDetailProdGridExpanded
+                    ? '收起产品图列表 (露出下方视觉规范与模块库)'
+                    : `展开全部 ${prodAssets.length} 张产品图 (当前紧凑滚动)`}
+                </span>
+                {isDetailProdGridExpanded ? (
+                  <ChevronUp className="w-3 h-3" />
+                ) : (
+                  <ChevronDown className="w-3 h-3" />
+                )}
+              </button>
+            )}
 
             {/* Product Selling Points & Parameters Input */}
             <div className="space-y-1.5 pt-1">
@@ -1783,111 +1846,190 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                           )}
                         </div>
 
-                        {prodAssets.length > 0 && (
-                          <div className="space-y-1.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[11px] font-semibold text-slate-600">
-                                本屏绑定产品图 (#Prod，建议单屏绑定 1~2 个核心角度，点击缩略图右侧 🔍 可放大看清细节):
-                              </span>
-                              {onAutoAnalyzeDetailRefs && (
-                                <button
-                                  type="button"
-                                  disabled={isExtractingStyle}
-                                  onClick={onAutoAnalyzeDetailRefs}
-                                  className="h-5 px-2 rounded bg-violet-50 hover:bg-violet-100 text-violet-700 text-[10px] font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50 shrink-0"
-                                  title="AI 自动识别所有 #Prod 的角度（正面/开盖/斜视/双耳等）并更新标签"
-                                >
-                                  <Wand2 className="w-2.5 h-2.5" />
-                                  <span>AI 自动识别各图角度</span>
-                                </button>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {prodAssets.map((prod) => {
-                                const selected =
-                                  boundProdIds.length === 0 ||
-                                  boundProdIds.includes(prod.id);
-                                const roleInfo = PROD_ANGLE_ROLES.find(
-                                  (r) =>
-                                    r.value ===
-                                    normalizeAngleRoleValue(prod.prodAngleRole)
-                                );
-                                const cleanTag = (prod.tag || prod.name || '')
-                                  .replace(/\.(png|jpe?g|webp)$/i, '')
-                                  .trim();
-                                return (
-                                  <div
-                                    key={prod.id}
-                                    onClick={() =>
-                                      toggleTaskProdBinding(task, prod.id)
-                                    }
-                                    className={`group relative h-11 pl-1.5 pr-2 rounded-xl border text-[11px] flex items-center gap-2 transition-all cursor-pointer select-none ${
-                                      selected
-                                        ? 'border-blue-600 bg-blue-50/90 text-blue-900 shadow-2xs ring-1 ring-blue-500/30'
-                                        : 'border-slate-200 bg-white text-slate-600 opacity-70 hover:opacity-100 hover:border-slate-300'
-                                    }`}
-                                  >
-                                    <div className="relative w-8 h-8 rounded-lg overflow-hidden bg-slate-100 border border-slate-200/80 shrink-0">
-                                      <img
-                                        src={prod.previewUrl}
-                                        alt={prod.tag}
-                                        referrerPolicy="no-referrer"
-                                        className="w-full h-full object-cover"
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          onPreviewImage(
-                                            prod.previewUrl,
-                                            `#${prod.code} · ${roleInfo?.label || '产品原图'}`,
-                                            cleanTag
+                        {prodAssets.length > 0 && (() => {
+                          const isPickerExpanded =
+                            expandedProdPickerTaskIds.includes(task.id);
+                          const effectiveSelectedIds =
+                            boundProdIds.length === 0
+                              ? prodAssets.map((p) => p.id)
+                              : boundProdIds;
+                          const shouldCollapsePool =
+                            prodAssets.length > 6 && !isPickerExpanded;
+                          const visibleProds = shouldCollapsePool
+                            ? prodAssets.filter(
+                                (p, i) =>
+                                  effectiveSelectedIds.includes(p.id) || i < 4
+                              ).slice(0, 6)
+                            : prodAssets;
+                          const hiddenCount =
+                            prodAssets.length - visibleProds.length;
+
+                          return (
+                            <div className="space-y-1.5">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <span className="text-[11px] font-semibold text-slate-600">
+                                  本屏绑定产品图 (已选 {effectiveSelectedIds.length} 张，点击切换 · 缩略图悬停 🔍 放大):
+                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {prodAssets.length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const prodIdSet = new Set(
+                                          prodAssets.map((p) => p.id)
+                                        );
+                                        const preservedOtherIds =
+                                          task.referenceImageIds.filter(
+                                            (id) => !prodIdSet.has(id)
                                           );
-                                        }}
-                                        title="点击放大看清该角度大图"
-                                        className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[10px] font-bold transition-opacity cursor-zoom-in"
-                                      >
-                                        🔍
-                                      </button>
-                                    </div>
-                                    <div className="flex flex-col leading-tight min-w-0 max-w-[135px]">
-                                      <div className="flex items-center gap-1">
-                                        <span
-                                          className={`font-mono-tabular font-bold text-[11px] ${
-                                            selected
-                                              ? 'text-blue-700'
-                                              : 'text-slate-800'
-                                          }`}
+                                        onUpdateTask(task.id, {
+                                          referenceImageIds: [
+                                            ...preservedOtherIds,
+                                            prodAssets[0].id,
+                                          ],
+                                        });
+                                      }}
+                                      className="h-5 px-2 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium cursor-pointer"
+                                      title="仅保留第1张产品主图，取消其余多余花色/角度绑定"
+                                    >
+                                      仅绑首图
+                                    </button>
+                                  )}
+                                  {prodAssets.length > 6 && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedProdPickerTaskIds((prev) =>
+                                          prev.includes(task.id)
+                                            ? prev.filter((id) => id !== task.id)
+                                            : [...prev, task.id]
+                                        )
+                                      }
+                                      className="h-5 px-2 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] font-semibold flex items-center gap-0.5 cursor-pointer"
+                                    >
+                                      <span>
+                                        {isPickerExpanded
+                                          ? '收起候选池'
+                                          : `展开全部 (${prodAssets.length}张)`}
+                                      </span>
+                                      {isPickerExpanded ? (
+                                        <ChevronUp className="w-2.5 h-2.5" />
+                                      ) : (
+                                        <ChevronDown className="w-2.5 h-2.5" />
+                                      )}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {visibleProds.map((prod) => {
+                                  const selected =
+                                    effectiveSelectedIds.includes(prod.id);
+                                  const normRole = normalizeAngleRoleValue(
+                                    prod.prodAngleRole
+                                  );
+                                  const isSpecialRole =
+                                    normRole !== 'hero_front';
+                                  const roleInfo = PROD_ANGLE_ROLES.find(
+                                    (r) => r.value === normRole
+                                  );
+                                  const cleanTag = (
+                                    prod.tag ||
+                                    prod.name ||
+                                    ''
+                                  )
+                                    .replace(/\.(png|jpe?g|webp)$/i, '')
+                                    .trim();
+                                  return (
+                                    <div
+                                      key={prod.id}
+                                      onClick={() =>
+                                        toggleTaskProdBinding(task, prod.id)
+                                      }
+                                      className={`group relative h-10 pl-1.5 pr-2 rounded-xl border text-[11px] flex items-center gap-1.5 transition-all cursor-pointer select-none ${
+                                        selected
+                                          ? 'border-blue-600 bg-blue-50/90 text-blue-900 shadow-2xs ring-1 ring-blue-500/30'
+                                          : 'border-slate-200 bg-white text-slate-600 opacity-70 hover:opacity-100 hover:border-slate-300'
+                                      }`}
+                                    >
+                                      <div className="relative w-7 h-7 rounded-lg overflow-hidden bg-slate-100 border border-slate-200/80 shrink-0">
+                                        <img
+                                          src={prod.previewUrl}
+                                          alt={prod.tag}
+                                          referrerPolicy="no-referrer"
+                                          className="w-full h-full object-cover"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            onPreviewImage(
+                                              prod.previewUrl,
+                                              `#${prod.code} · ${roleInfo?.label || '产品原图'}`,
+                                              cleanTag
+                                            );
+                                          }}
+                                          title="点击放大看清该角度大图"
+                                          className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[10px] font-bold transition-opacity cursor-zoom-in"
                                         >
-                                          #{prod.code}
-                                        </span>
-                                        {roleInfo && (
+                                          🔍
+                                        </button>
+                                      </div>
+                                      <div className="flex flex-col leading-tight min-w-0 max-w-[125px]">
+                                        <div className="flex items-center gap-1">
                                           <span
-                                            className={`text-[10px] px-1 py-0.2 rounded font-semibold truncate ${
+                                            className={`font-mono-tabular font-bold text-[10px] ${
                                               selected
-                                                ? 'bg-blue-600 text-white'
-                                                : 'bg-slate-100 text-slate-600'
+                                                ? 'text-blue-700'
+                                                : 'text-slate-800'
                                             }`}
                                           >
-                                            {roleInfo.label}
+                                            #{prod.code}
+                                          </span>
+                                          {isSpecialRole && roleInfo && (
+                                            <span
+                                              className={`text-[9px] px-1 py-0.2 rounded font-semibold truncate ${
+                                                selected
+                                                  ? 'bg-blue-600 text-white'
+                                                  : 'bg-slate-100 text-slate-600'
+                                              }`}
+                                            >
+                                              {roleInfo.label}
+                                            </span>
+                                          )}
+                                        </div>
+                                        {cleanTag && (
+                                          <span
+                                            className="text-[10px] text-slate-500 truncate"
+                                            title={cleanTag}
+                                          >
+                                            {cleanTag}
                                           </span>
                                         )}
                                       </div>
-                                      {cleanTag && (
-                                        <span
-                                          className="text-[10px] text-slate-500 truncate"
-                                          title={cleanTag}
-                                        >
-                                          {cleanTag}
-                                        </span>
-                                      )}
                                     </div>
-                                  </div>
-                                );
-                              })}
+                                  );
+                                })}
+
+                                {hiddenCount > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedProdPickerTaskIds((prev) => [
+                                        ...prev,
+                                        task.id,
+                                      ])
+                                    }
+                                    className="h-10 px-2.5 rounded-xl border border-dashed border-slate-300 hover:border-blue-500 bg-slate-50/70 hover:bg-blue-50/50 text-[11px] font-semibold text-slate-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer transition-colors"
+                                  >
+                                    <span>+ 其余 {hiddenCount} 张素材</span>
+                                    <ChevronDown className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
                       </div>
 
                       {/* Two-Column Editable Area: Left = Structured 3-Part Copywriting | Right = Visual Prompt + Extra Note */}

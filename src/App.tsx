@@ -6801,8 +6801,33 @@ export default function App() {
             caseDeliveryMode: 'none',
           },
         }));
+        const extractedHexes = Array.from(
+          new Set(
+            (res.unifiedVisualSpec.match(/#[0-9A-Fa-f]{6}\b/g) || []).map((m) =>
+              m.toUpperCase()
+            )
+          )
+        );
+        if (extractedHexes.length >= 2) {
+          const syncedPalette = `60%主背景(${extractedHexes[0]}) + 30%同色系展台(${extractedHexes[1]}) + 10%高光点缀(${extractedHexes[2] || extractedHexes[1]})`;
+          setTasks((prev) => {
+            const next = prev.map((t) =>
+              t.printThemeConfig
+                ? {
+                    ...t,
+                    printThemeConfig: {
+                      ...t.printThemeConfig,
+                      themePalette: syncedPalette,
+                    },
+                  }
+                : t
+            );
+            tasksRef.current = next;
+            return next;
+          });
+        }
         showToast(
-          '已成功提取《整页6锚点统一视觉规范》！生图时将仅传自有产品图+该规范，杜绝竞品原图干扰',
+          '已成功提取《整页6锚点统一视觉规范》并同步全页色板！生图时将仅传自有产品图+该规范，杜绝竞品原图干扰',
           'success'
         );
       }
