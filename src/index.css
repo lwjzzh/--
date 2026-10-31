@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Plus Jakarta Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'DM Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    --font-mono: 'SF Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+    /* macOS Native Productivity Surface & Border Tokens */
+    --surface-canvas: #F4F5F7;
+    --surface-panel: #FFFFFF;
+    --surface-recessed: #F8FAFC;
+    --surface-control-track: rgba(226, 232, 240, 0.7);
+    --border-hairline: rgba(15, 23, 42, 0.08);
+    --border-strong: rgba(15, 23, 42, 0.14);
+    --accent-primary: #2563EB;
+    --ink-primary: #0F172A;
+    --ink-secondary: #475569;
+    --ink-muted: #94A3B8;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--surface-canvas);
+    color: var(--ink-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+
+  .font-mono-tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Subtle macOS-grade scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.35);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.55);
+  }
+}
+
+/* Utility classes for macOS segmented controls, hairline surfaces, and 3-tier button hierarchy */
+.macos-segmented-track {
+  background-color: rgba(226, 232, 240, 0.65);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.05);
+}
+
+.macos-segmented-thumb-active {
+  background-color: #FFFFFF;
+  color: #0F172A;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 0 0 0.5px rgba(15, 23, 42, 0.06);
+}
+
+/* Unified Linear Icon Style (SF Symbols / macOS Productivity weight) */
+svg.lucide {
+  stroke-width: 1.75px;
+}
+
+/* 3-Tier Button Hierarchy: Primary, Secondary, Text/Ghost */
+.btn-primary {
+  background-color: #2563EB;
+  color: #FFFFFF;
+  font-weight: 600;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.18);
+  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: #1D4ED8;
+}
+.btn-primary:disabled {
+  background-color: #E2E8F0;
+  color: #94A3B8;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background-color: #FFFFFF;
+  color: #334155;
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.11);
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.03);
+  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: #F8FAFC;
+  border-color: rgba(15, 23, 42, 0.18);
+  color: #0F172A;
+}
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background-color: transparent;
+  color: #64748B;
+  font-weight: 500;
+  border-radius: 6px;
+  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-ghost:hover:not(:disabled) {
+  background-color: rgba(15, 23, 42, 0.05);
+  color: #0F172A;
+}
+.btn-ghost:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
