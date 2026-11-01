@@ -1,130 +1,110 @@
-# 电商视觉工作台（E-Com Studio）五大高频体验升级方案
+# 全局设置中心（Global Settings Center）深度优化方案
 
-围绕真实电商设计师与运营人员「先定主图套图、再延展详情页、高频抽卡比稿、快速复用卖点公式、局部锁图精修」的作业习惯，对工作台导航流转、卡片多版本回滚、5列橱窗审稿视图、常用卖点快捷调用及锁成图微调重绘进行全方位体验升级。
+针对当前「全局设置中心」残留旧版递增编码公式、卖点预置字段冗余、缺少全局生图防变形护栏控制以及模型切换跨页签割裂的问题，本方案在**保留现有 5 个页签框架**的前提下，对各页签内部核心业务表单进行实质性升级，使其真正成为支撑「① 主图/SKU工作台」与「② 详情页工作台」高质量稳定出图的全局控制中枢。
+
+---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> 以下核心交互决策已根据第一阶段确认结果锁定，将在执行阶段完整落地：
+> 以下核心设计决策已根据您的确认选项锁定，确认后将立即按此方案实施代码落地：
 
-- **Confirmed Decision 1（顶栏工作台顺序与状态记忆）**：将顶栏切换器顺序调整为 **「① 主图/SKU工作台」 → 「② 详情页工作台」 → 「③ 资产库」**，首次进入默认打开主图/SKU工作台，同时在本地自动记忆用户上次停留的工作台页面，刷新后无缝恢复。
-- **Confirmed Decision 2（主图工作台 5 列橱窗总览视图交互深度）**：在主图工作台画布顶部提供 **「双栏精修视图 / 5列橱窗总览视图」** 切换；5列橱窗模式下不仅支持 5 张套图同屏大图审视，还保留直接修改主标题、切换历史成图版本（v1/v2/v3）、单张重绘、裂变与放大下载等核心高频操作。
-- **Confirmed Decision 3（锁当前成图微调重绘覆盖范围）**：在 **「① 主图/SKU工作台」与「② 详情页工作台」** 的所有已出图卡片上均提供 **「🔒 锁当前成图微调」** 开关与微调指令输入能力，开启后将当前满意成图作为高权重视觉结构锚点传给生图管线，仅对指定局部细节或文字做定向重绘。
+- **Confirmed Decision 1（页签结构保留与内容提纯）**：保持现有 5 个顶层页签（`1. 预置与重置兜底`、`2. 端点与模型配置`、`3. 常用模型池`、`4. 云存储 OSS / R2`、`5. 桌面架构与本地数据`）结构不变，全面升级各页签内部的业务表单与交互闭环。
+- **Confirmed Decision 2（清理旧版编码公式，升级双工作台真实兜底）**：移除已废弃的「默认递增编码前缀 (`TWS328-C`) / 调换主副标题顺序 / 序号规则」及卖点方案中的「绑定主副标题前缀」冗余输入框，改为**主图工作台（复刻程度 / 印花4维联动 / 语言 / 画幅）+ 详情页工作台（画幅 / 分辨率 / 文字模式）**的真实参数兜底，并让「常用卖点方案库」同时服务主图与详情页双工作台。
+- **Confirmed Decision 3（新增生图质量与防变形全局护栏配置）**：新增「生图质量与防变形全局护栏」模块，支持自定义**全局负向禁用词（Negative Prompt）**及核心防变形开关（净网防印 `#Prod` 编号、反“胶囊”药丸词净化、单品最多 2 张互补视角收敛、锁图微调 95% 构图锚定）。
+- **Confirmed Decision 4（端点、模型切换与常用池同屏闭环 + 本地缓存清理工具）**：在页签 2 中直接内嵌常用模型池胶囊快捷切换与增删操作，无需频繁跳页签；在页签 5 中新增**本地存储（LocalStorage & IndexedDB）实时占用统计与历史记录一键清理工具**。
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**：
-  1. **顺应“先主图、后详情”的导航与记忆流转**：顶栏以 `① 主图/SKU工作台` 为起点，配合同源转详情按钮，形成从 5 张高点击主图到 3:4 / 9:16 详情页的自然单向流水线，并持久化记忆上次访问的标签页。
-  2. **卡片级多版本历史时光机（v1 / v2 / v3 一键回滚）**：在主图卡片与详情页分屏卡片的成图区下方直接渲染历史生成缩略图条，点击任意历史版本即可将其恢复为当前采用成图（同步作用于后续的“拿此图裂变”、“转详情页”及“合成无缝长图”）。
-  3. **主图画布「双栏精修 ⇄ 5列橱窗总览」双视图**：解决笔记本屏幕下卡片纵向过长、难以一眼把控全套 5 张主图视觉节奏的问题；5列橱窗视图下 5 张主图并排陈列，支持即改标题、切历史版本与单卡重绘。
-  4. **「⚡ 常用卖点预设」随手贴胶囊菜单**：将全局防丢保护的 `defaultSellingPointPresets`（如声学高配版、潮玩印花款、豪华礼盒装及用户自定义方案）挂载到主图左侧全局卖点框、主图单卡卖点框以及详情页产品卖点框旁，一键填入或追加。
-  5. **「🔒 锁当前成图微调」局部重绘模式**：当某张主图或详情屏整体构图与底座 95% 满意、仅需微调文案或局部小元素时，勾选「锁当前成图微调」并输入修改点，后端生图引擎将当前 `resultImageUrl` 作为画面基准锚点注入，避免重新抽卡破坏既有满意构图。
-- **Target Audience / Persona**：高频产出电商主图套图、多花色 SKU 裂变图及模块化详情页的电商视觉设计师、店铺运营与品牌主理人。
-- **Key Value**：消除“重绘怕丢好图、审稿需要反复上下滚屏、常用卖点反复手打、改一个字整张图重抽”四大操作摩擦，将单品全套视觉产出效率再提升 40% 以上。
+- **What It Does**：将「全局设置中心」从静态配置面板升级为集**双工作台默认参数兜底、跨工作台卖点预置库、全局生图防变形护栏、API 通道与常用模型同屏切换、云存储双擎管理、本地数据库缓存清理**于一体的生产级配置中心。
+- **Target Audience / Persona**：高频使用主图复刻、多花色裂变与详情页模块化生成的电商视觉设计师与运营人员。
+- **Key Value**：
+  1. **消除无效表单干扰**：彻底清除旧版 SKU 递增编码前缀等不再使用的历史遗留字段；
+  2. **全局把控生图下限**：通过全局负向禁用词与防变形引擎开关，从源头锁定全站生图质量；
+  3. **高频操作一页闭环**：在同一页签内完成网关通道、当前模型切换与常用模型池增删，并提供本地缓存与历史生成记录的一键清理能力。
 
 ---
 
 ## 2. User Experience & Visual Design
 
 - **Key User Flows**：
-  1. **主图优先与记忆流转**：打开应用默认进入 `① 主图/SKU工作台`（若此前停留在 `② 详情页工作台` 或 `③ 资产库` 则自动恢复）。完成 5 张主图后点击画布右上角「同源转详情页」，自动跳转至 `② 详情页工作台`。
-  2. **5列橱窗审稿与版本优选**：在主图工作台点击顶部工具栏的 **「5列橱窗 (5卡同屏)」** 按钮，5 张主图以标准电商橱窗网格一字排开。用户可在任意卡片底部直接点击 `v1`、`v2`、`v3` 缩略图比对不同抽卡批次的效果，选定最满意的一版，或直接修改标题、点击单卡「重绘」。
-  3. **一键套用常用卖点预设**：在左侧「4. 核心卖点与画幅规格」或单张卡片的「画面卖点文案」旁点击 **「⚡ 常用卖点」**，弹出预设方案列表，点击即可将预设的卖点角标与包装说明一键填入当前输入框（若预设带标题前缀还可同步应用）。
-  4. **锁当前成图微调重绘**：在任意已生成成图的主图卡或详情页分屏卡上，点亮 **「🔒 锁图微调」** 按钮并输入微调要求（如：“保持画面构图与芝士底座不变，将顶部主标题改为‘蓝牙6.0旗舰版’，右上角增加1个小火箭”），点击「微调重绘」，新生成的图片自动追加为最新历史版本，原满意图依然保留在 `v1` 随时可退回。
-
+  1. **常用卖点与双工作台兜底配置（页签 1）**：用户编辑简洁的 3 字段卖点方案（方案名 + 核心卖点条 + 商品/配件补充），可一键推送至「① 主图工作台」或「② 详情页工作台」；修改主图默认复刻模式（如 `参考风格 + 印花4维联动 + 1:1 + 2K`）与详情页默认规格（`9:16 + 2K`），点击顶栏「重置」时自动按此兜底恢复。
+  2. **全局生图防变形护栏配置（页签 1）**：用户可查看并编辑全局负向禁用词（如禁止黑棕死板底框、禁止 3D 医药胶囊颗粒、禁止多余重复充电仓、禁止乱码文字），并管理 4 项防变形底层护栏开关。
+  3. **通道与常用模型同屏操控（页签 2 & 页签 3）**：在页签 2 的「Agent 策划模型」与「视觉生图模型」卡片内直接展示常用模型池快捷切换标签（支持一键点选、一键存入常用池、一键移除），同时页签 3 提供完整的模型池批量管理与推荐预设一键恢复。
+  4. **本地缓存统计与清理（页签 5）**：直观查看当前工作台图片、资产库（IndexedDB）、生图历史记录及本地配置的条数与空间占用估算，支持一键清空历史生成记录、一键释放已上云素材的本地 Base64 缓存。
 - **Visual Identity & Theme**：
-  - *Aesthetic Direction*：专业商业生产力工作台风格（Clean Studio Utilitarian），克制、高信噪比，将视觉焦点完全让位于商品摄影与潮玩配色。
-  - *Color Palette & Mood*：
-    - 60% 主画布：浅冷灰工作台底色（`#F4F5F7`）搭配纯白工作面板（`#FFFFFF`）。
-    - 30% 结构层：精细分割线（`border-slate-200/80`）、次级配置底栏（`bg-slate-50/80`）与深灰正文层级（`text-slate-800` / `text-slate-500`）。
-    - 10% 强调色：主操作黑曜石色（`#1F2329`）、品牌功能蓝（`#2563EB`）、锁图微调琥珀金状态色（`#D97706` / `bg-amber-50`）。
-  - *Typography & Hierarchy*：标题与导航保持清晰紧凑的无衬线字重对比（`font-bold` 13px–14px），所有序号、分辨率、历史版本号（`v1`、`v2`）、耗时与统计数字严格采用等宽对齐数字（`font-mono-tabular`）。
-  - *Component Styling & Layout*：遵循单层卡片海拔原则（Single-Elevation Depth），历史版本缩略图条与常用卖点下拉菜单采用紧凑的 28px–32px 行高设计，确保不额外挤占宝贵的纵向画布空间。
-
-- **Interactive Feedback & Motion**：
-  - 切换历史版本时，成图预览框即时切换并高亮当前激活版本的缩略图边框，同时弹出轻量级 Toast 提示当前已激活的版本号与生成时间。
-  - 开启「🔒 锁图微调」时，卡片重绘按钮文案动态变为 **「🔒 锁图微调重绘」** 并呈现琥珀色高亮边框，明确告知用户当前处于锚定微调模式而非随机重抽模式。
+  - *Aesthetic Direction*：延续全站高密度、清爽克制的专业电商 SaaS 工作台视觉风格。
+  - *Color Palette & Mood*：以 `#F8FAFC` / `#FFFFFF` 纯净亮色表面为主（60%），`#E2E8F0` 1px 结构细线分隔（30%），主操作按钮与激活态采用 `#2563EB`（品牌蓝）与 `#10B981`（质量护栏绿）（10%）。
+  - *Typography & Hierarchy*：标题采用紧凑粗体无衬线体，所有模型 ID、端点 URL、分辨率规格、缓存体积与计数统计严格采用 `font-mono-tabular` 等宽对齐数字。
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1：卡片内历史版本管理采用“非破坏性指针切换”而非“覆盖截断”**
-  - *Chosen Approach*：当用户点击历史缩略图（如从最新的 `v3` 切回 `v1`）时，仅将卡片当前的 `resultImageUrl`（及对应的 `resultOssUrl`）指向所选历史项，**不删除** `historyImages` 列表中的任何记录；下次再生成新图时，新图继续排在历史记录最前面（最多保留最近 8 个版本）。
-  - *Why*：设计师在比稿时经常需要在两三个版本之间反复横跳对比（A/B Test），非破坏性指针切换既保证了任何一次抽卡成果都不会丢失，又能让“打包下载”、“合成无缝长图”和“拿此图裂变”直接读取当前选中的 `resultImageUrl`。
-  - *Alternatives Considered*：切回旧版本时回滚删除后续版本——会导致误点后丢失刚抽出来的新图，容错率低。
-
-- **Decision 2：5 列橱窗视图采用“轻量可交互卡片”而非“纯静态图片墙”**
-  - *Chosen Approach*：在 `grid-cols-2 md:grid-cols-3 xl:grid-cols-5` 的 5 列橱窗布局中，隐藏冗长的多角度配图选择器与 4 维联动展开表单，但保留 **序号 + 可编辑标题框 + 大比例成图预览（含悬停放大/下载/锁图微调开关） + 历史版本缩略图条 + 底部卖点单行速改与立即重绘按钮**。
-  - *Why*：兼顾了“一屏看全 5 张套图整体视觉协调性”与“发现某张标题或画面小瑕疵顺手就改”的高效体验，无需为了改两个字频繁在双视图之间来回切换。
-
-- **Decision 3：「锁当前成图微调」复用并强化多模态基准锚点管线**
-  - *Chosen Approach*：为 `SkuTask` 与 `ScreenTask` 增加 `lockResultAsRef?: boolean` 与 `refineNote?: string` 字段；当开启且存在 `resultImageUrl` 时，前端将该成图 URL 传给 `/api/image/generate` 的 `lockedResultImageUrl` 参数。后端将其作为最高优先级的【当前锁定成图基准（局部微调锚点）】注入多模态输入，同时保留 `#Prod` 产品原图防变形约束。
-  - *Why*：在保持商品工业外形 100% 不跑偏的前提下，最大化锁死当前满意成图的相机机位、底座造型、背景光影与排版骨架，实现真正可控的局部迭代。
+- **Decision 1：将旧版 SKU 标题公式兜底替换为「主图 + 详情页双工作台真实参数兜底」**
+  - *Chosen Approach*：移除 `titlePrefix`、`subtitleText`、`swapTitleOrder`、`titleIndexMode` 四个旧版表单项，改为配置主图工作台默认参数（`replicaFidelity`、`styleLinkageMode`、`replicaLanguage`、`defaultAspectRatio`、`defaultImageSize`）与详情页默认参数（`detailAspectRatio`、`defaultImageSize`、`textMode`）。
+  - *Why*：当前主图工作台已全面升级为「爆款参考图复刻 + 多花色套母版裂变 + 印花4维联动」工作流，旧版编码前缀表单已无实际业务作用，替换为真实工作台参数后可实现一键应用与重置防丢。
+- **Decision 2：在全局设置中开放「生图质量与防变形护栏」配置并接入生图链路**
+  - *Chosen Approach*：在 `StudioConfig` 中新增 `qualityGuardConfig`（包含 `autoSanitizePromptCodes`、`strictSingleSkuProdCap`、`enforceLightRoundedCards`、`lockRefineHighWeightAnchor` 以及可编辑的 `customNegativePrompt`），并在主图与详情页生图请求中实时生效。
+  - *Why*：不仅让底层防变形逻辑透明可控，还允许针对特定品类（如 TWS 耳机、美妆个护、潮玩数码）追加专属负向禁令（如“严禁出现有线耳机线、严禁改变指示灯位置”），直接提升生图稳定性。
+- **Decision 3：页签 2 内联常用模型池快捷操作 + 页签 5 集成真实本地存储清理**
+  - *Chosen Approach*：保持 5 个页签入口不变，在页签 2 的两个模型卡片内直接渲染常用模型池胶囊列表（点击即切换、支持行内删除与新增），并在页签 5 顶部新增「本地数据库与缓存管理面板」。
+  - *Why*：既满足保留 5 个页签的习惯，又彻底消除了在页签 2 与页签 3 之间来回切换的繁琐操作，同时解决了长期大量生图后浏览器 IndexedDB / LocalStorage 体积膨胀的痛点。
 
 ---
 
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
+## 4. Technical Architecture & Data Strategy
 
 ### Architecture & Component Diagram
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐
-│                          App.tsx (Root State & Persistence)                   │
-│  • activeTopTab ('sku_studio' default + localStorage memory)                  │
-│  • config.defaultSellingPointPresets (Global Reset-Proof Presets)             │
-│  • skuTasks / tasks (with historyImages[], lockResultAsRef, refineNote)       │
-└───────────────┬───────────────────────────────┬───────────────────────────────┘
-                │                               │
-                ▼                               ▼
-┌───────────────────────────────────────┐ ┌─────────────────────────────────────┐
-│        StudioTopHeader.tsx            │ │        server.ts (/api/image/*)     │
-│  • ① 主图/SKU工作台 (First Tab)        │ │  • lockedResultImageUrl Resolver    │
-│  • ② 详情页工作台 (Second Tab)         │ │  • Multimodal Anchor Prompt Engine  │
-│  • ③ 资产库 (Third Tab)                │ │    (Locks composition + applies     │
-└───────────────┬───────────────────────┘ │     targeted refineNote + #Prod)    │
-                │                         └─────────────────▲───────────────────┘
-                ▼                                           │
-┌───────────────────────────────────────────────────────────┴───────────────────┐
-│                     Workspace Views & Interactive Controls                    │
-├───────────────────────────────────────┬───────────────────────────────────────┤
-│          SkuStudioView.tsx            │         DetailModularView.tsx         │
-│  • View Switcher:                     │  • Per-Screen History Strip           │
-│    [双栏精修视图] ⇄ [5列橱窗总览视图]    │    (v1/v2/v3 1-click active switch)   │
-│  • Selling Point Preset Picker (⚡)   │  • Selling Point Preset Quick-Insert  │
-│    (Global sidebar + Per-card input)  │  • Per-Screen "🔒 锁当前成图微调"      │
-│  • Per-Card History Strip (v1/v2/v3)  │    Toggle & Targeted Refine Input     │
-│  • Per-Card "🔒 锁图微调" Toggle       │                                       │
-└───────────────────────────────────────┴───────────────────────────────────────┘
+│                   Global Settings Center Modal (5 Tabs)                       │
+├───────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌─ Tab 1: 预置与重置兜底 (Presets, Dual-Studio Defaults & Quality Guard) ──┐ │
+│  │  • 双工作台通用卖点方案库 (精简3字段 + 一键应用至主图/详情页)            │ │
+│  │  • 主图/SKU工作台默认兜底 (复刻程度 / 印花4维联动 / 语言 / 比例 / 2K)    │ │
+│  │  • 详情页工作台默认兜底   (9:16或3:4画幅 / 分辨率 / 文字模式 / 重置保护) │ │
+│  │  • 生图质量与防变形全局护栏 (4项防变形开关 + 全局自定义负向禁用词)       │ │
+│  └─────────────────────────────────────┬────────────────────────────────────┘ │
+│                                        │                                      │
+│  ┌─ Tab 2: 端点与模型配置 ─────────────┼─ Tab 3: 常用模型池 ────────────────┐ │
+│  │  • API网关通道卡片 & 宽泛端点清洗   │  • Agent / 生图模型全量矩阵管理    │ │
+│  │  • Agent & 生图模型同屏快捷胶囊池   │  • 模型能力标签 & 一键恢复推荐池   │ │
+│  └─────────────────────────────────────┼────────────────────────────────────┘ │
+│                                        │                                      │
+│  ┌─ Tab 4: 云存储 OSS / R2 ────────────┼─ Tab 5: 桌面架构与本地数据管理 ────┐ │
+│  │  • 阿里云OSS / Cloudflare R2双擎切换│  • LocalStorage/IndexedDB体积统计  │ │
+│  │  • 0-Base64直链传输与一键全量上云   │  • 历史生图记录/临时缓存一键清理   │ │
+│  └─────────────────────────────────────┴────────────────────────────────────┘ │
+└────────────────────────────────────────┬──────────────────────────────────────┘
+                                         ▼
+┌───────────────────────────────────────────────────────────────────────────────┐
+│        StudioConfig State + QualityGuardEngine + Server Render Pipeline       │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Data Model & State Extensions
 
-1. **Workspace Navigation Memory (`WorkspaceTopTab`)**：
-   - 默认初始值设为 `'sku_studio'`，启动时优先从 `localStorage.getItem('ecom_studio_last_active_tab_v1')` 读取上次停留的工作台；每次切换顶栏 Tab 时实时写入该键值。
-2. **Task Level Refinement & History Selection (`SkuTask` & `ScreenTask`)**：
-   - 新增可选属性 `lockResultAsRef?: boolean`（是否开启锁当前成图微调）与 `refineInstruction?: string`（针对当前成图的局部微调指令）。
-   - `historyImages` 容量上限从 6 扩展至 8，每条记录包含 `url`、`ossUrl`、`timestamp`、`promptSnapshot`；当前正在使用的版本通过比对 `task.resultImageUrl === hist.url` 高亮标识，并按生成先后顺序编号为 `v1`（最早）至 `vN`（最新）。
-3. **Image Generation Request Payload (`GenerateImageRequest`)**：
-   - 在 `studioBridge.generateImage` 与后端 `/api/image/generate` 中新增可选字段 `lockedResultImageUrl?: string` 与 `refineInstruction?: string`。
+1. **`QualityGuardGlobalConfig`（新增于 `StudioConfig.qualityGuardConfig`）**：
+   - `autoSanitizePromptCodes: boolean`（默认 `true`：生图前自动剥离 `#Prod/#Case` 编号并将“胶囊”转化为“浅色圆角信息卡”）
+   - `strictSingleSkuProdCap: boolean`（默认 `true`：单品画面严格限制最多 2 张互补视角，自动拦截异款正面花色混绑）
+   - `enforceLightRoundedCards: boolean`（默认 `true`：强制浅色半透明圆角信息卡，严禁生硬黑棕底框与 3D 医药胶囊颗粒）
+   - `lockRefineHighWeightAnchor: boolean`（默认 `true`：锁图微调模式下强制将当前满意成图作为第 1 顺位最高权重基准并屏蔽竞品图）
+   - `customNegativePrompt: string`（用户自定义全局补充禁用词，生图时自动拼接至 `finalPrompt` 负向禁令区块）
+2. **`SkuDefaultFallbackConfig`（扩展支持真实主图复刻参数）**：
+   - 新增 `replicaFidelity?: ReplicaFidelity`（默认 `'style_reference'` 或 `'high_replica'`）
+   - 新增 `styleLinkageMode?: StyleLinkageMode`（默认 `'print_4d'`）
+   - 新增 `replicaLanguage?: ReplicaLanguage`（默认 `'zh'`）
+   - 点击顶栏「重置」(`handleClearWorkspaceToBlank`) 时，自动读取上述兜底配置恢复 `skuBatchConfig` 与 `config.requirements`。
 
 ### Interactive Component & State Mapping
 
-- **顶栏工作台顺序切换 (`StudioTopHeader`)**：
-  - 将导航按钮顺序调整为 `① 主图/SKU工作台` → `② 详情页工作台` → `③ 资产库`；同步更新详情页与主图台内部的跨台引导文案编号（如“流转至 ② 详情页工作台”）。
-- **卡片内历史成图版本切换条 (`SkuStudioView` & `DetailModularView`)**：
-  - 当 `task.historyImages.length > 0` 时，在成图预览框下方渲染横向版本条：展示每个版本的微缩图、`v1 / v2 / v3` 标签与当前激活蓝框。
-  - 点击任意历史版本缩略图时，调用 `onUpdateSkuTask` / `onUpdateTask` 将 `resultImageUrl`、`resultOssUrl` 更新为所选历史项的 URL，无需重新请求接口即可立即生效。
-- **主图工作台「双栏精修 ⇄ 5列橱窗」视图切换 (`SkuStudioView`)**：
-  - 在画布顶部工具栏新增分段切换控件 `canvasViewMode: 'detailed_2col' | 'showcase_5col'`（自动持久化在组件或本地状态中）。
-  - `showcase_5col` 视图采用响应式 5 列网格（`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5`），每张卡片紧凑呈现：顶部编号与可编辑主标题、自适应比例高清成图框（悬停放大/下载/转详情/裂变）、历史版本缩略图切换条、单行卖点速改框、以及底部的「🔒 锁图微调」开关与「立即复刻/微调重绘」按钮。
-- **「⚡ 常用卖点预设」快捷点选菜单 (`SkuStudioView` & `DetailModularView`)**：
-  - 将 `config.defaultSellingPointPresets` 传入 `SkuStudioView` 与 `DetailModularView`。
-  - 在主图台左侧「4. 核心卖点与画幅规格」标题行右侧、每张主图卡片的「画面卖点文案」输入框旁、以及详情页左侧「产品卖点、规格参数与售后信息」旁，提供「⚡ 常用卖点」下拉选择器；点击任意预设项即可将 `sellingPointBadge` 与 `packageSpecNote` 一键填入（支持替换或追加），并带快捷入口打开全局设置弹窗管理预设库。
-- **「🔒 锁当前成图微调」局部重绘 (`SkuStudioView`, `DetailModularView`, `App.tsx`, `server.ts`)**：
-  - 当卡片已有 `resultImageUrl` 时，在成图操作区显示 `🔒 锁图微调` 切换按钮。
-  - 开启后展开一行高亮的微调输入框（如：“输入局部修改点：如改文字、加减漂浮小元素、调亮背景光效...”）。
-  - 点击生图按钮时，`App.tsx` 将当前 `task.resultImageUrl` 作为 `lockedResultImageUrl`、将微调要求作为 `refineInstruction` 发送至 `/api/image/generate`。
-  - `server.ts` 接收到 `lockedResultImageUrl` 后，调用 `resolveReferenceInlineImage` 将该满意成图解析为多模态图像块，注入严格指令：`【🔒 当前已确认满意成图基准（局部微调锁死构图锚点）】：请保持此图的整体构图机位、产品摆放姿态、展台底座、背景色彩光影与未提及的文字版式 100% 不变，仅严格执行以下局部微调指令：${refineInstruction}`。
+- **常用卖点方案行内「应用至主图 / 应用至详情页」**：点击后分别将卖点方案写入 `skuBatchConfig.referenceInfoText`（及当前主图卡片）或追加至 `productInfoText`（详情页产品卖点框），并弹出 Toast 反馈。
+- **全局负向禁用词注入**：在 `generateSingleTaskImage`（详情页）与 `generateSingleSkuTaskImage`（主图）中读取 `config.qualityGuardConfig?.customNegativePrompt`，自动附加 `【全局负向禁令（严禁出现）】：...` 至生图指令。
+- **本地缓存与历史记录清理（页签 5）**：
+  - 实时计算当前工作台素材数、公共资产库（`commonAssets`）条数、生图历史记录（`generationRecords`）条数、母版库（`confirmedTemplates`）条数及本地存储估算大小（MB/KB）；
+  - 提供「清理全部生图历史记录」、「清理运行日志」、「将已上云素材的本地 Base64 瘦身释放」三个实用清理按钮。

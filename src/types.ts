@@ -1,6 +1,10 @@
-export type ChannelMode = 'official' | 'custom_gateway';
+export type ChannelMode = 'official' | 'custom_gateway' | 'codex_cli';
 
-export type ApiProtocolMode = 'auto' | 'gemini-native' | 'openai-compatible';
+export type ApiProtocolMode =
+  | 'auto'
+  | 'gemini-native'
+  | 'openai-compatible'
+  | 'codex-cli';
 
 // Unrestricted string model IDs so users can configure and switch to any model freely
 export type AgentModelId = string;
@@ -266,7 +270,8 @@ export const PROD_ANGLE_ROLE_OPTIONS: ReadonlyArray<{
  */
 export type StyleLinkageMode =
   | 'print_4d' // 印花主题4维深度联动 (潮玩/卡通印花专属：色板+潮玩底座+伴生悬浮物+胶囊/字色)
-  | 'color_sync' // 同色系顺应 (提取产品主色调协调背景色温)
+  | 'harmonize_color' // 同色系顺应 (提取产品主色调协调背景色温)
+  | 'color_sync' // 同色系顺应 (兼容别名)
   | 'lock_scene'; // 锁死原场景 (保持参考图原有背景与灯光，仅替换产品)
 
 /**
@@ -392,6 +397,8 @@ export interface ApiChannelProfile {
   apiKey?: string;
   customHeaders?: string;
   protocol?: ApiProtocolMode;
+  cliCommand?: string;
+  cliExtraArgs?: string;
   concurrency: number;
   timeoutSec: number;
 }
@@ -455,6 +462,17 @@ export interface SkuDefaultFallbackConfig {
   defaultAspectRatio: AspectRatioOption;
   defaultImageSize: ImageSizeOption;
   textMode: TextRenderMode;
+  replicaFidelity?: ReplicaFidelity;
+  styleLinkageMode?: StyleLinkageMode;
+  replicaLanguage?: ReplicaLanguage;
+}
+
+export interface QualityGuardGlobalConfig {
+  autoSanitizePromptCodes: boolean;
+  strictSingleSkuProdCap: boolean;
+  enforceLightRoundedCards: boolean;
+  lockRefineHighWeightAnchor: boolean;
+  customNegativePrompt: string;
 }
 
 export interface StudioConfig {
@@ -467,6 +485,7 @@ export interface StudioConfig {
   imageModelPresets?: ModelPresetItem[];
   defaultSellingPointPresets?: SkuSellingPointPreset[];
   skuDefaultFallback?: SkuDefaultFallbackConfig;
+  qualityGuardConfig?: QualityGuardGlobalConfig;
   confirmBeforeReset?: boolean;
   preserveCopyOnReset?: boolean;
   defaultAspectRatio: AspectRatioOption;
@@ -501,6 +520,7 @@ export interface ReferenceImageItem {
   id: string;
   code: string;
   category: 'product' | 'case';
+  enabled?: boolean; // 是否勾选参与当前工作台排卡、裂变与详情页生成（默认 true）
   prodAngleRole?: ProductAngleRole;
   printThemeConfig?: PrintThemeLinkageConfig;
   isCommonAsset?: boolean;

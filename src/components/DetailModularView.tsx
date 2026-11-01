@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -33,6 +33,7 @@ import {
   History,
   Settings,
   Zap,
+  ScanEye,
 } from 'lucide-react';
 import {
   ReferenceImageItem,
@@ -49,6 +50,16 @@ import {
 } from '../types';
 import { SavedCommonAsset } from '../utils/assetLibraryDb';
 import { downloadSingleScreenImage } from '../utils/exportHelpers';
+import {
+  QUICK_REFINE_RESCUE_CHIPS,
+  QuickAssetSelectMode,
+  autoFixDetailTaskQuality,
+  buildDetailPayloadPreview,
+  filterEnabledProds,
+  inspectDetailTaskQuality,
+  smartPickComplementaryProds,
+  toggleRefineChipInstruction,
+} from '../utils/qualityGuardEngine';
 
 const PROD_ANGLE_ROLES: { value: string; label: string }[] =
   PROD_ANGLE_ROLE_OPTIONS.map((o) => ({ value: o.value, label: o.label }));
@@ -302,6 +313,8 @@ export interface DetailModularViewProps {
   onUpdateDetailAssetTag?: (refId: string, newTag: string) => void;
   onAutoAnalyzeDetailRefs?: () => void;
   onSyncFromSkuStudio?: (targetRatio?: AspectRatioOption) => void;
+  onToggleDetailAssetEnabled?: (refId: string) => void;
+  onBatchSetDetailAssetsEnabled?: (mode: QuickAssetSelectMode) => void;
   sellingPointPresets?: SkuSellingPointPreset[];
   onOpenPresetSettings?: () => void;
   onShowToast?: (text: string, type?: 'info' | 'success' | 'error') => void;
@@ -359,6 +372,8 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
   onUpdateDetailAssetTag,
   onAutoAnalyzeDetailRefs,
   onSyncFromSkuStudio,
+  onToggleDetailAssetEnabled,
+  onBatchSetDetailAssetsEnabled,
   sellingPointPresets = [],
   onOpenPresetSettings,
   onShowToast,
@@ -456,6 +471,60 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
     });
   };
 
+  const enabledProdAssets = useMemo(
+    () => filterEnabledProds(prodAssets, true),
+    [prodAssets]
+  );
+  const enabledProdCount = useMemo(
+    () => prodAssets.filter((p) => p.enabled !== false).length,
+    [prodAssets]
+  );
+
+  const [inspectingPayloadTaskId, setInspectingPayloadTaskId] = useState<
+    string | null
+  >(null);
+
+  const detailQualityMap = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof inspectDetailTaskQuality>>();
+    for (const t of tasks) {
+      map.set(t.id, inspectDetailTaskQuality(t, prodAssets));
+    }
+    return map;
+  }, [tasks, prodAssets]);
+
+  const detailTasksWithIssuesCount = useMemo(() => {
+    let count = 0;
+    for (const q of detailQualityMap.values()) {
+      if (!q.passed) count += 1;
+    }
+    return count;
+  }, [detailQualityMap]);
+
+  const handleAutoFixAllDetailTasks = () => {
+    let fixedCount = 0;
+    for (const t of tasks) {
+      const q = detailQualityMap.get(t.id);
+      if (q && !q.passed) {
+        const fixed = autoFixDetailTaskQuality(t, prodAssets);
+        onUpdateTask(t.id, {
+          referenceImageIds: fixed.referenceImageIds,
+          visualPrompt: fixed.visualPrompt,
+          typographyPlan: fixed.typographyPlan,
+          copywriting: fixed.copywriting,
+        });
+        fixedCount += 1;
+      }
+    }
+    if (fixedCount > 0) {
+      onShowToast?.(
+        `已自动预检并修复 ${fixedCount} 屏详情模块的配图冲突、内部编号(#Prod)与药丸词！`,
+        'success'
+      );
+    } else {
+      onShowToast?.('当前全套详情页分屏均已通过防变形质量预检！', 'info');
+    }
+  };
+
   const toggleTaskProdBinding = (task: ScreenTask, prodId: string) => {
     const prodIdSet = new Set(prodAssets.map((p) => p.id));
     const preservedOtherIds = task.referenceImageIds.filter(
@@ -464,10 +533,18 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
     const explicitProdIds = task.referenceImageIds.filter((id) =>
       prodIdSet.has(id)
     );
+    const smartDefaultIds = smartPickComplementaryProds({
+      moduleType: task.moduleType,
+      title: task.title,
+      prompt: task.visualPrompt,
+      enabledProds: enabledProdAssets,
+    }).map((p) => p.id);
     const effectiveProdIds =
       explicitProdIds.length > 0
         ? explicitProdIds
-        : prodAssets.map((p) => p.id);
+        : smartDefaultIds.length > 0
+          ? smartDefaultIds
+          : prodAssets.slice(0, 1).map((p) => p.id);
 
     const exists = effectiveProdIds.includes(prodId);
     let nextProdIds: string[];
@@ -478,7 +555,8 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
         nextProdIds = [prodId];
       }
     } else {
-      nextProdIds = [...effectiveProdIds, prodId];
+      const cap = task.moduleType === 'series_matrix' ? 6 : 3;
+      nextProdIds = [...effectiveProdIds, prodId].slice(0, cap);
     }
     onUpdateTask(task.id, {
       referenceImageIds: [...preservedOtherIds, ...nextProdIds],
@@ -515,32 +593,35 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
       {/* ================= LEFT SIDEBAR: MODULAR DETAIL CONFIG PANEL (405px) ================= */}
       <aside className="w-full lg:w-[405px] xl:w-[425px] shrink-0 lg:h-full bg-white border-b lg:border-b-0 lg:border-r border-slate-200/80 flex flex-col lg:overflow-hidden select-none">
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
-          {/* 1. 自有产品图 (#Prod) 与 产品信息 */}
+          {/* 1. 自有产品图 (#Prod) + 勾选参与开关 与 产品信息 */}
           <section className="space-y-2">
-            <div className="flex items-center justify-between gap-1">
+            <div className="flex items-center justify-between gap-1.5">
               <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-[13px] font-bold text-slate-900 truncate">
-                  1. 自有产品原图 (#Prod)
+                <span className="text-[13px] font-bold text-slate-900 whitespace-nowrap shrink-0">
+                  1. 自有产品图 (#Prod)
                 </span>
-                <span className="text-[11px] text-slate-400 font-mono-tabular shrink-0">
-                  ({prodAssets.length}张)
+                <span
+                  className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200/80 text-[10px] font-mono-tabular font-semibold whitespace-nowrap shrink-0"
+                  title={`已勾选启用 ${enabledProdCount} 张 / 共 ${prodAssets.length} 张产品图`}
+                >
+                  {enabledProdCount}/{prodAssets.length}
                 </span>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-1.5 shrink-0">
                 {onAutoAnalyzeDetailRefs && prodAssets.length > 0 && (
                   <button
                     type="button"
                     disabled={isExtractingStyle}
                     onClick={onAutoAnalyzeDetailRefs}
                     title="AI 自动识别每张产品图的拍摄视角与花色标签"
-                    className="h-6 px-2 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                    className="h-5.5 px-1.5 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200/80 text-[11px] font-semibold flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
                   >
                     {isExtractingStyle ? (
                       <Loader2 className="w-3 h-3 animate-spin" />
                     ) : (
                       <Wand2 className="w-3 h-3" />
                     )}
-                    <span>AI识视角</span>
+                    <span>AI识图</span>
                   </button>
                 )}
                 <button
@@ -552,16 +633,16 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                       selectedIds: [],
                     })
                   }
-                  className="text-[11px] font-medium text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                  className="text-[11px] font-medium text-blue-600 hover:text-blue-700 flex items-center gap-0.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <BookmarkCheck className="w-3 h-3" />
+                  <BookmarkCheck className="w-3 h-3 shrink-0" />
                   <span>资产库</span>
                 </button>
                 {prodAssets.length > 0 && (
                   <button
                     type="button"
                     onClick={() => onClearCategoryAssets('product')}
-                    className="text-[11px] text-slate-400 hover:text-rose-600 cursor-pointer"
+                    className="text-[11px] text-slate-400 hover:text-rose-600 whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     清空
                   </button>
@@ -582,7 +663,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                         <button
                           type="button"
                           onClick={() => onSyncFromSkuStudio()}
-                          title="仅同步主图工作台的产品原图(#Prod)至详情页素材池"
+                          title="仅同步主图工作台的产品原图(#Prod)至详情页素材池（保留勾选状态与视角标签）"
                           className="h-6 px-2 hover:bg-blue-100 text-blue-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer border-r border-blue-200/80"
                         >
                           <ArrowRightLeft className="w-3 h-3" />
@@ -645,6 +726,51 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
               </div>
             )}
 
+            {/* Quick Participation Filter Bar (仅勾选的素材参与当前详情页规划与配图) */}
+            {prodAssets.length > 1 && onBatchSetDetailAssetsEnabled && (
+              <div className="flex items-center justify-between gap-1 px-2 py-1 bg-slate-50 border border-slate-200/80 rounded-lg text-[10px]">
+                <span className="text-slate-500 font-medium whitespace-nowrap shrink-0">
+                  勾选本页:
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onBatchSetDetailAssetsEnabled('all')}
+                    className="px-1.5 py-0.5 rounded bg-white hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200/90 font-medium whitespace-nowrap cursor-pointer"
+                    title="全部勾选参与详情页生成"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBatchSetDetailAssetsEnabled('angles_only')}
+                    className="px-1.5 py-0.5 rounded bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 font-semibold whitespace-nowrap cursor-pointer"
+                    title="仅保留第1张主推花色 + 全部结构角度图（开盖/单耳/微距/包装），避免多花色混入单品详情屏"
+                  >
+                    仅1款+多角度
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onBatchSetDetailAssetsEnabled('patterns_only')
+                    }
+                    className="px-1.5 py-0.5 rounded bg-white hover:bg-purple-50 text-purple-700 border border-purple-200 font-medium whitespace-nowrap cursor-pointer"
+                    title="仅勾选各款花色正面主视图（适合全家福矩阵）"
+                  >
+                    仅各款花色
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBatchSetDetailAssetsEnabled('invert')}
+                    className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-100 text-slate-600 border border-slate-200/90 whitespace-nowrap cursor-pointer"
+                    title="反向勾选"
+                  >
+                    反选
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => {
@@ -652,12 +778,16 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                 onUploadFiles(e.dataTransfer.files, 'product');
               }}
               className={`grid grid-cols-4 gap-2 ${
-                !isDetailProdGridExpanded && prodAssets.length > 8
-                  ? 'max-h-[210px] overflow-y-auto pr-1'
+                isDetailProdGridExpanded && prodAssets.length > 12
+                  ? 'max-h-[340px] overflow-y-auto pr-1'
                   : ''
               }`}
             >
-              {prodAssets.map((prod, idx) => {
+              {(isDetailProdGridExpanded || prodAssets.length <= 7
+                ? prodAssets
+                : prodAssets.slice(0, 7)
+              ).map((prod, idx) => {
+                const isEnabled = prod.enabled !== false;
                 const normRole = normalizeAngleRoleValue(prod.prodAngleRole);
                 const isSpecialRole = normRole !== 'hero_front';
                 const roleBadgeClass =
@@ -676,7 +806,9 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                 return (
                   <div
                     key={prod.id}
-                    className="flex flex-col gap-1 bg-slate-50/70 p-1 rounded-xl border border-slate-200/80"
+                    className={`flex flex-col gap-1 transition-opacity ${
+                      isEnabled ? 'opacity-100' : 'opacity-45 grayscale-[30%]'
+                    }`}
                   >
                     <div
                       onClick={() =>
@@ -686,7 +818,11 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                           prod.name
                         )
                       }
-                      className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 group cursor-zoom-in"
+                      className={`relative aspect-square rounded-xl overflow-hidden bg-slate-100 border group cursor-zoom-in ${
+                        isEnabled
+                          ? 'border-blue-500/70 ring-1 ring-blue-500/20'
+                          : 'border-slate-200/80'
+                      }`}
                     >
                       <img
                         src={prod.previewUrl}
@@ -694,9 +830,29 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
-                      <span className="absolute top-1 left-1 bg-slate-900/80 text-white text-[9px] font-mono-tabular px-1 py-0.5 rounded pointer-events-none">
-                        #{prod.code || `P${idx + 1}`}
-                      </span>
+                      {/* Top-left Compact Participation Checkbox + Short Index */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleDetailAssetEnabled?.(prod.id);
+                        }}
+                        title={
+                          isEnabled
+                            ? `已启用 #${prod.code || `Prod-${idx + 1}`}（点击暂停此素材参与本页）`
+                            : `已暂停 #${prod.code || `Prod-${idx + 1}`}（点击重新启用）`
+                        }
+                        className={`absolute top-1 left-1 z-10 h-4 px-1 rounded flex items-center gap-0.5 text-[9px] font-mono-tabular font-bold transition-colors cursor-pointer ${
+                          isEnabled
+                            ? 'bg-blue-600/95 text-white shadow-2xs'
+                            : 'bg-slate-900/75 text-slate-300 hover:bg-slate-900'
+                        }`}
+                      >
+                        <span className="w-2.5 h-2.5 rounded-xs border border-white/80 flex items-center justify-center">
+                          {isEnabled && <Check className="w-2 h-2 stroke-[3]" />}
+                        </span>
+                        <span>#{idx + 1}</span>
+                      </button>
                       <button
                         type="button"
                         onClick={(e) => {
@@ -745,7 +901,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                           onUpdateDetailAssetTag(prod.id, e.target.value)
                         }
                         placeholder="花色/视角..."
-                        className="w-full text-[10px] text-slate-700 bg-white border border-slate-200/80 rounded px-1 py-0.5 text-center truncate focus:outline-none focus:border-slate-900"
+                        className="w-full h-5 px-1 text-[10px] text-slate-700 bg-slate-50 border border-slate-200/80 rounded-md focus:bg-white focus:outline-none focus:border-slate-900 text-center truncate"
                       />
                     ) : (
                       <span className="text-[10px] text-slate-600 text-center truncate px-0.5">
@@ -759,23 +915,23 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
               <button
                 type="button"
                 onClick={() => prodFileInputRef.current?.click()}
-                className="aspect-square rounded-xl border border-dashed border-slate-300 hover:border-slate-500 bg-slate-50/70 hover:bg-slate-100/70 flex flex-col items-center justify-center gap-1 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                className="aspect-square rounded-xl border border-dashed border-slate-300 hover:border-slate-500 bg-slate-50/70 hover:bg-slate-100/70 flex flex-col items-center justify-center gap-0.5 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
               >
-                <Plus className="w-5 h-5" />
+                <Plus className="w-4 h-4" />
                 <span className="text-[10px] font-medium">添加产品图</span>
               </button>
             </div>
 
-            {prodAssets.length > 8 && (
+            {prodAssets.length > 7 && (
               <button
                 type="button"
                 onClick={() => setIsDetailProdGridExpanded((prev) => !prev)}
-                className="w-full py-1 text-[11px] font-medium text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                className="w-full py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200/60 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
               >
                 <span>
                   {isDetailProdGridExpanded
-                    ? '收起产品图列表 (露出下方视觉规范与模块库)'
-                    : `展开全部 ${prodAssets.length} 张产品图 (当前紧凑滚动)`}
+                    ? '收起产品图列表 (仅显示前 2 行)'
+                    : `展开全部 ${prodAssets.length} 张产品图 (其余 ${prodAssets.length - 7} 张已折叠)`}
                 </span>
                 {isDetailProdGridExpanded ? (
                   <ChevronUp className="w-3 h-3" />
@@ -1264,10 +1420,29 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
               </button>
             </div>
 
-            <span className="hidden xl:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-medium">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>每屏仅传自有 #Prod + 统一规范 · 0竞品图干扰</span>
-            </span>
+            {tasks.length > 0 && (
+              <button
+                type="button"
+                onClick={handleAutoFixAllDetailTasks}
+                title={
+                  detailTasksWithIssuesCount > 0
+                    ? `检测到 ${detailTasksWithIssuesCount} 屏存在多图打架、混绑花色或 #Prod 内部编号泄漏，点击一键自动修复整页`
+                    : '全套详情页分屏已通过防变形质量预检（点击可重新扫描收敛视角配图）'
+                }
+                className={`h-7 px-2.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 border transition-all cursor-pointer ${
+                  detailTasksWithIssuesCount > 0
+                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300 shadow-2xs'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  {detailTasksWithIssuesCount > 0
+                    ? `⚡ 一键修复冲突 (${detailTasksWithIssuesCount}屏)`
+                    : '防变形预检通过 · 0竞品干扰'}
+                </span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -1849,27 +2024,92 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                         {prodAssets.length > 0 && (() => {
                           const isPickerExpanded =
                             expandedProdPickerTaskIds.includes(task.id);
+                          const smartDefaultIds = smartPickComplementaryProds({
+                            moduleType: task.moduleType,
+                            title: task.title,
+                            prompt: task.visualPrompt,
+                            enabledProds: enabledProdAssets,
+                          }).map((p) => p.id);
                           const effectiveSelectedIds =
-                            boundProdIds.length === 0
-                              ? prodAssets.map((p) => p.id)
-                              : boundProdIds;
+                            boundProdIds.length > 0
+                              ? boundProdIds
+                              : smartDefaultIds.length > 0
+                                ? smartDefaultIds
+                                : prodAssets.slice(0, 1).map((p) => p.id);
+                          const candidatePool = isPickerExpanded
+                            ? prodAssets
+                            : enabledProdAssets;
                           const shouldCollapsePool =
-                            prodAssets.length > 6 && !isPickerExpanded;
+                            candidatePool.length > 6 && !isPickerExpanded;
                           const visibleProds = shouldCollapsePool
-                            ? prodAssets.filter(
-                                (p, i) =>
-                                  effectiveSelectedIds.includes(p.id) || i < 4
-                              ).slice(0, 6)
-                            : prodAssets;
+                            ? candidatePool
+                                .filter(
+                                  (p, i) =>
+                                    effectiveSelectedIds.includes(p.id) || i < 4
+                                )
+                                .slice(0, 6)
+                            : candidatePool;
                           const hiddenCount =
                             prodAssets.length - visibleProds.length;
+                          const screenQuality = detailQualityMap.get(task.id);
 
                           return (
                             <div className="space-y-1.5">
+                              {/* Per-Screen Pre-Flight Quality Inspector Banner */}
+                              {screenQuality && !screenQuality.passed && (
+                                <div className="px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-300/90 flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 min-w-0 text-[11px] text-amber-900">
+                                    <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                    <span className="font-bold shrink-0">
+                                      生图防变形预警:
+                                    </span>
+                                    <span className="truncate">
+                                      {screenQuality.issues
+                                        .map((i) => i.label)
+                                        .join(' ｜ ')}
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const fixed = autoFixDetailTaskQuality(
+                                        task,
+                                        prodAssets
+                                      );
+                                      onUpdateTask(task.id, {
+                                        referenceImageIds:
+                                          fixed.referenceImageIds,
+                                        visualPrompt: fixed.visualPrompt,
+                                        typographyPlan: fixed.typographyPlan,
+                                        copywriting: fixed.copywriting,
+                                      });
+                                      onShowToast?.(
+                                        `已自动修复第 ${String(task.screenNumber).padStart(2, '0')} 屏的配图冲突与提示词内部编号！`,
+                                        'success'
+                                      );
+                                    }}
+                                    className="h-5.5 px-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-semibold shrink-0 cursor-pointer"
+                                  >
+                                    ⚡ 一键修复本屏
+                                  </button>
+                                </div>
+                              )}
+
                               <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <span className="text-[11px] font-semibold text-slate-600">
-                                  本屏绑定产品图 (已选 {effectiveSelectedIds.length} 张，点击切换 · 缩略图悬停 🔍 放大):
-                                </span>
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+                                    本屏绑定产品图 (已选{' '}
+                                    <strong className="text-blue-600">
+                                      {effectiveSelectedIds.length}
+                                    </strong>{' '}
+                                    张 · 建议 1~2 张互补视角):
+                                  </span>
+                                  {screenQuality?.passed && (
+                                    <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-medium whitespace-nowrap">
+                                      ✓ 预检通过
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="flex items-center gap-1.5 shrink-0">
                                   {prodAssets.length > 1 && (
                                     <button
@@ -1882,15 +2122,56 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                           task.referenceImageIds.filter(
                                             (id) => !prodIdSet.has(id)
                                           );
+                                        const picked =
+                                          smartPickComplementaryProds({
+                                            moduleType: task.moduleType,
+                                            title: task.title,
+                                            prompt: task.visualPrompt,
+                                            enabledProds: enabledProdAssets,
+                                            preferredPrimaryProdId:
+                                              effectiveSelectedIds[0],
+                                          });
+                                        if (picked.length > 0) {
+                                          onUpdateTask(task.id, {
+                                            referenceImageIds: [
+                                              ...preservedOtherIds,
+                                              ...picked.map((p) => p.id),
+                                            ],
+                                          });
+                                          onShowToast?.(
+                                            `已为第 ${String(task.screenNumber).padStart(2, '0')} 屏智能匹配 ${picked.length} 张互补视角（防异款花色打架）`,
+                                            'success'
+                                          );
+                                        }
+                                      }}
+                                      className="h-5 px-2 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-semibold whitespace-nowrap cursor-pointer"
+                                      title="AI自动从左侧已勾选产品图中挑选 1~2 张互补视角（如正面主图+开盖/单耳），杜绝多花色打架变形"
+                                    >
+                                      ✨ AI配互补角度
+                                    </button>
+                                  )}
+                                  {prodAssets.length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const prodIdSet = new Set(
+                                          prodAssets.map((p) => p.id)
+                                        );
+                                        const preservedOtherIds =
+                                          task.referenceImageIds.filter(
+                                            (id) => !prodIdSet.has(id)
+                                          );
+                                        const primaryProd =
+                                          enabledProdAssets[0] || prodAssets[0];
                                         onUpdateTask(task.id, {
                                           referenceImageIds: [
                                             ...preservedOtherIds,
-                                            prodAssets[0].id,
+                                            primaryProd.id,
                                           ],
                                         });
                                       }}
-                                      className="h-5 px-2 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium cursor-pointer"
-                                      title="仅保留第1张产品主图，取消其余多余花色/角度绑定"
+                                      className="h-5 px-2 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium whitespace-nowrap cursor-pointer"
+                                      title="仅保留第1张启用产品主图，取消其余多余花色/角度绑定"
                                     >
                                       仅绑首图
                                     </button>
@@ -1905,7 +2186,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                             : [...prev, task.id]
                                         )
                                       }
-                                      className="h-5 px-2 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] font-semibold flex items-center gap-0.5 cursor-pointer"
+                                      className="h-5 px-2 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] font-semibold flex items-center gap-0.5 whitespace-nowrap cursor-pointer"
                                     >
                                       <span>
                                         {isPickerExpanded
@@ -1925,6 +2206,9 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                 {visibleProds.map((prod) => {
                                   const selected =
                                     effectiveSelectedIds.includes(prod.id);
+                                  const prodIdx = prodAssets.findIndex(
+                                    (p) => p.id === prod.id
+                                  );
                                   const normRole = normalizeAngleRoleValue(
                                     prod.prodAngleRole
                                   );
@@ -1939,6 +2223,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                     ''
                                   )
                                     .replace(/\.(png|jpe?g|webp)$/i, '')
+                                    .replace(/^(TWS\d+[-_]?)/i, '')
                                     .trim();
                                   return (
                                     <div
@@ -1946,13 +2231,13 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                       onClick={() =>
                                         toggleTaskProdBinding(task, prod.id)
                                       }
-                                      className={`group relative h-10 pl-1.5 pr-2 rounded-xl border text-[11px] flex items-center gap-1.5 transition-all cursor-pointer select-none ${
+                                      className={`group relative h-8.5 pl-1 pr-2 rounded-lg border text-[11px] flex items-center gap-1.5 transition-all cursor-pointer select-none ${
                                         selected
-                                          ? 'border-blue-600 bg-blue-50/90 text-blue-900 shadow-2xs ring-1 ring-blue-500/30'
-                                          : 'border-slate-200 bg-white text-slate-600 opacity-70 hover:opacity-100 hover:border-slate-300'
+                                          ? 'border-blue-600 bg-blue-50/90 text-blue-900 shadow-2xs ring-1 ring-blue-500/25'
+                                          : 'border-slate-200 bg-white text-slate-600 opacity-75 hover:opacity-100 hover:border-slate-300'
                                       }`}
                                     >
-                                      <div className="relative w-7 h-7 rounded-lg overflow-hidden bg-slate-100 border border-slate-200/80 shrink-0">
+                                      <div className="relative w-6.5 h-6.5 rounded-md overflow-hidden bg-slate-100 border border-slate-200/80 shrink-0">
                                         <img
                                           src={prod.previewUrl}
                                           alt={prod.tag}
@@ -1975,7 +2260,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                           🔍
                                         </button>
                                       </div>
-                                      <div className="flex flex-col leading-tight min-w-0 max-w-[125px]">
+                                      <div className="flex flex-col leading-tight min-w-0 max-w-[115px]">
                                         <div className="flex items-center gap-1">
                                           <span
                                             className={`font-mono-tabular font-bold text-[10px] ${
@@ -1984,7 +2269,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                                 : 'text-slate-800'
                                             }`}
                                           >
-                                            #{prod.code}
+                                            #{prodIdx >= 0 ? prodIdx + 1 : prod.code}
                                           </span>
                                           {isSpecialRole && roleInfo && (
                                             <span
@@ -2020,7 +2305,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                         task.id,
                                       ])
                                     }
-                                    className="h-10 px-2.5 rounded-xl border border-dashed border-slate-300 hover:border-blue-500 bg-slate-50/70 hover:bg-blue-50/50 text-[11px] font-semibold text-slate-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer transition-colors"
+                                    className="h-8.5 px-2.5 rounded-lg border border-dashed border-slate-300 hover:border-blue-500 bg-slate-50/70 hover:bg-blue-50/50 text-[10px] font-semibold text-slate-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer transition-colors"
                                   >
                                     <span>+ 其余 {hiddenCount} 张素材</span>
                                     <ChevronDown className="w-3 h-3" />
@@ -2094,7 +2379,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
 
                             <div className="flex items-start gap-1.5">
                               <span className="text-[10px] font-semibold text-slate-500 w-13 pt-1.5 shrink-0">
-                                胶囊/参数
+                                信息卡/参数
                               </span>
                               <textarea
                                 rows={2}
@@ -2110,7 +2395,7 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                                     copywriting: next,
                                   });
                                 }}
-                                placeholder="底部圆角胶囊卡或参数表内容（多个卖点用 | 分隔）..."
+                                placeholder="底部圆角信息卡或参数表内容（多个卖点用 | 分隔）..."
                                 className="flex-1 p-2 text-xs leading-relaxed bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900 text-slate-800 resize-none"
                               />
                             </div>
@@ -2283,19 +2568,51 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                         </div>
                       )}
 
-                      {/* 🔒 Lock Current Result for Local Refinement Input */}
+                      {/* 🔒 Lock Current Result for Local Refinement Input + Rescue Chips */}
                       {task.resultImageUrl && task.lockResultAsRef && (
-                        <input
-                          type="text"
-                          value={task.refineInstruction || ''}
-                          onChange={(e) =>
-                            onUpdateTask(task.id, {
-                              refineInstruction: e.target.value,
-                            })
-                          }
-                          placeholder="🔒 局部微调指令（如：保持构图，把标题改成亮黄、减少底部小元素）..."
-                          className="w-full h-7 px-2 text-[11px] bg-amber-50/90 border border-amber-300 rounded-lg focus:bg-white focus:outline-none focus:border-amber-600 text-slate-900 placeholder:text-amber-700/70"
-                        />
+                        <div className="p-2 rounded-xl bg-amber-50/90 border border-amber-300/90 space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-1">
+                            {QUICK_REFINE_RESCUE_CHIPS.map((chip) => {
+                              const active = (
+                                task.refineInstruction || ''
+                              ).includes(chip.directive);
+                              return (
+                                <button
+                                  key={chip.id}
+                                  type="button"
+                                  onClick={() =>
+                                    onUpdateTask(task.id, {
+                                      refineInstruction:
+                                        toggleRefineChipInstruction(
+                                          task.refineInstruction,
+                                          chip.directive
+                                        ),
+                                    })
+                                  }
+                                  title={chip.directive}
+                                  className={`h-5 px-1.5 rounded border text-[9px] font-semibold transition-all cursor-pointer ${
+                                    active
+                                      ? 'bg-amber-600 text-white border-amber-700 shadow-2xs'
+                                      : 'bg-white hover:bg-amber-100/80 text-amber-900 border-amber-200'
+                                  }`}
+                                >
+                                  {chip.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <input
+                            type="text"
+                            value={task.refineInstruction || ''}
+                            onChange={(e) =>
+                              onUpdateTask(task.id, {
+                                refineInstruction: e.target.value,
+                              })
+                            }
+                            placeholder="🔒 点选上方救图指令，或输入局部修改要求（保持构图不变）..."
+                            className="w-full h-7 px-2 text-[11px] bg-white border border-amber-300 rounded-lg focus:outline-none focus:border-amber-600 text-slate-900 placeholder:text-amber-700/70"
+                          />
+                        </div>
                       )}
 
                       <div className="flex items-center gap-1.5">
@@ -2322,6 +2639,16 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
                             <span>锁图微调</span>
                           </button>
                         )}
+
+                        <button
+                          type="button"
+                          onClick={() => setInspectingPayloadTaskId(task.id)}
+                          title="生图前真实投喂透视镜：查看本屏实际传给生图模型的图片序列、已隔离冗余图与防变形护栏"
+                          className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                        >
+                          <ScanEye className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>透视</span>
+                        </button>
 
                         <button
                           type="button"
@@ -2498,6 +2825,199 @@ export const DetailModularView: React.FC<DetailModularViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Pre-Flight Payload & Prompt Inspector Modal for Detail Screen */}
+      {(() => {
+        const targetTask = tasks.find((t) => t.id === inspectingPayloadTaskId);
+        if (!targetTask) return null;
+        const screenIdx = tasks.findIndex((t) => t.id === targetTask.id);
+        const preview = buildDetailPayloadPreview({
+          task: targetTask,
+          allProds: prodAssets,
+          unifiedVisualSpec,
+        });
+        const quality = detailQualityMap.get(targetTask.id);
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+                <div className="flex items-center gap-2 min-w-0">
+                  <ScanEye className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <h3 className="text-sm font-bold text-slate-900 truncate">
+                    生图前真实投喂透视镜 · 第 {String(screenIdx + 1).padStart(2, '0')} 屏 ({targetTask.title})
+                  </h3>
+                  {preview.filteredOutCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-semibold shrink-0">
+                      已自动隔离 {preview.filteredOutCount} 张冗余产品图
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInspectingPayloadTaskId(null)}
+                  className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-4 text-xs">
+                {/* Quality Warning inside Inspector if any */}
+                {quality && !quality.passed && (
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 flex items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-amber-900 flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 text-amber-600" />
+                        <span>检测到 {quality.issues.length} 项生图前潜在冲突：</span>
+                      </div>
+                      <ul className="text-[11px] text-amber-800 list-disc list-inside">
+                        {quality.issues.map((iss, idx) => (
+                          <li key={idx}>
+                            <span className="font-semibold">{iss.label}：</span>
+                            {iss.detail}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const fixed = autoFixDetailTaskQuality(
+                          targetTask,
+                          prodAssets
+                        );
+                        onUpdateTask(targetTask.id, {
+                          referenceImageIds: fixed.referenceImageIds,
+                          visualPrompt: fixed.visualPrompt,
+                          typographyPlan: fixed.typographyPlan,
+                        });
+                        onShowToast?.(
+                          '已完成本屏一键修复，透视镜已实时更新！',
+                          'success'
+                        );
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold shrink-0 cursor-pointer"
+                    >
+                      ⚡ 一键修复本屏
+                    </button>
+                  </div>
+                )}
+
+                {/* 1. Ordered Image Slots Actually Sent to Image Model */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-900">
+                      1. 实际投喂给生图模型的图片序列（共 {preview.imageSlots.length} 张，0竞品图混入）
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {preview.modeLabel}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {preview.imageSlots.map((slot) => (
+                      <div
+                        key={slot.order}
+                        className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/70 flex items-start gap-2.5"
+                      >
+                        <img
+                          src={slot.previewUrl}
+                          alt={slot.tag}
+                          referrerPolicy="no-referrer"
+                          onClick={() =>
+                            onPreviewImage(
+                              slot.previewUrl,
+                              `投喂槽位 #${slot.order}: ${slot.roleBadge}`
+                            )
+                          }
+                          className="w-14 h-14 rounded-lg object-cover border border-slate-200 shrink-0 cursor-zoom-in bg-white"
+                        />
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-center gap-1">
+                            <span className="px-1.5 py-0.5 rounded bg-slate-900 text-white text-[10px] font-bold">
+                              图#{slot.order}
+                            </span>
+                            <span className="text-[10px] font-semibold text-indigo-700 truncate">
+                              {slot.angleRoleLabel || slot.code}
+                            </span>
+                          </div>
+                          <div className="font-bold text-slate-800 truncate text-[11px]" title={slot.roleBadge}>
+                            {slot.roleBadge}
+                          </div>
+                          <div className="text-[10px] text-slate-500 truncate" title={slot.ruleDesc}>
+                            {slot.tag}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. Active Anti-Deformation & Style Guardrails */}
+                <div className="space-y-1.5">
+                  <div className="font-bold text-slate-900">
+                    2. 已激活的详情页零变形与色彩护栏（共 {preview.activeGuardrails.length} 项）
+                  </div>
+                  <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/90 space-y-1">
+                    {preview.activeGuardrails.map((g, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center gap-1.5 text-[11px] text-emerald-950 font-medium"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>{g}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Sanitized Prompt & Copywriting */}
+                <div className="space-y-1.5">
+                  <div className="font-bold text-slate-900">
+                    3. 净化后实际下发的分屏文案与场景描述（已自动剥离 #Prod/#Case 编号与禁用词）
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900 text-slate-100 font-mono text-[11px] space-y-1.5 leading-relaxed">
+                    <div>
+                      <span className="text-amber-400 font-semibold">[分层文案] </span>
+                      {preview.sanitizedCopywriting || '（无文案）'}
+                    </div>
+                    <div>
+                      <span className="text-emerald-400 font-semibold">[净化后画面指令] </span>
+                      {preview.compiledPositivePrompt || '（按模块预设与整页规范执行）'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-slate-500">
+                  确认上方投喂图槽位与净化指令无误后，可直接生成本屏
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setInspectingPayloadTaskId(null)}
+                    className="px-3.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  >
+                    关闭
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const taskToRun = targetTask;
+                      setInspectingPayloadTaskId(null);
+                      onGenerateSingleTask(taskToRun);
+                    }}
+                    className="px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-black text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span>立即按此投喂生成本屏</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

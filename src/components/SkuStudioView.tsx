@@ -34,6 +34,7 @@ import {
   History,
   Settings,
   Zap,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   ReferenceImageItem,
@@ -54,6 +55,17 @@ import {
 } from '../types';
 import { SavedCommonAsset } from '../utils/assetLibraryDb';
 import { downloadSingleSkuImage } from '../utils/exportHelpers';
+import {
+  QUICK_REFINE_RESCUE_CHIPS,
+  QuickAssetSelectMode,
+  autoFixSkuTaskQuality,
+  buildSkuPayloadPreview,
+  filterEnabledProds,
+  getEffectiveProdRole,
+  inspectSkuTaskQuality,
+  smartPickComplementaryProds,
+  toggleRefineChipInstruction,
+} from '../utils/qualityGuardEngine';
 
 const REPLICA_ASPECT_RATIOS: { value: AspectRatioOption; label: string }[] = [
   { value: '1:1', label: '1:1 方图' },
@@ -223,6 +235,8 @@ export interface SkuStudioViewProps {
     autoRunAfter: boolean
   ) => void;
   onBuildStandardFiveMainCards?: () => void;
+  onToggleSkuAssetEnabled?: (refId: string) => void;
+  onBatchSetSkuAssetsEnabled?: (mode: QuickAssetSelectMode) => void;
   sellingPointPresets?: SkuSellingPointPreset[];
   onOpenPresetSettings?: () => void;
 }
@@ -265,6 +279,8 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
   onUpdateSkuProdRole,
   onFissionTaskToOtherProds,
   onBuildStandardFiveMainCards,
+  onToggleSkuAssetEnabled,
+  onBatchSetSkuAssetsEnabled,
   sellingPointPresets = [],
   onOpenPresetSettings,
 }) => {
@@ -402,14 +418,28 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
         ? 'multi_prod_to_single_ref'
         : rawMatchMode;
 
-  // Compute expected replica tasks count based on match mode
+  const enabledProdAssets = useMemo(
+    () => filterEnabledProds(prodAssets, true),
+    [prodAssets]
+  );
+  const enabledProdCount = useMemo(
+    () => prodAssets.filter((p) => p.enabled !== false).length,
+    [prodAssets]
+  );
+
+  // Compute expected replica tasks count based on match mode & enabled products
   const plannedPairCount = useMemo(() => {
     if (skuTasks.length > 0) return skuTasks.length;
     if (replicaMatchMode === 'single_prod_to_multi_ref') {
       return Math.max(1, caseAssets.length || 5);
     }
-    return Math.max(1, prodAssets.length);
-  }, [skuTasks.length, replicaMatchMode, caseAssets.length, prodAssets.length]);
+    return Math.max(1, enabledProdAssets.length);
+  }, [
+    skuTasks.length,
+    replicaMatchMode,
+    caseAssets.length,
+    enabledProdAssets.length,
+  ]);
 
   const completedTasksCount = useMemo(
     () =>
@@ -418,6 +448,51 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
       ).length,
     [skuTasks]
   );
+
+  const [inspectingPayloadTaskId, setInspectingPayloadTaskId] = useState<
+    string | null
+  >(null);
+
+  const skuQualityMap = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof inspectSkuTaskQuality>>();
+    for (const t of skuTasks) {
+      map.set(t.id, inspectSkuTaskQuality(t, prodAssets, caseAssets));
+    }
+    return map;
+  }, [skuTasks, prodAssets, caseAssets]);
+
+  const tasksWithIssuesCount = useMemo(() => {
+    let count = 0;
+    for (const q of skuQualityMap.values()) {
+      if (!q.passed) count += 1;
+    }
+    return count;
+  }, [skuQualityMap]);
+
+  const handleAutoFixAllSkuTasks = () => {
+    let fixedCount = 0;
+    for (const t of skuTasks) {
+      const q = skuQualityMap.get(t.id);
+      if (q && !q.passed) {
+        const fixed = autoFixSkuTaskQuality(t, prodAssets, caseAssets);
+        onUpdateSkuTask(t.id, {
+          productRefIds: fixed.productRefIds,
+          visualPrompt: fixed.visualPrompt,
+          typographyPlan: fixed.typographyPlan,
+          sellingPointBadge: fixed.sellingPointBadge,
+        });
+        fixedCount += 1;
+      }
+    }
+    if (fixedCount > 0) {
+      onShowToast(
+        `已自动预检并修复 ${fixedCount} 张主图卡片的配图冲突、参考图姿态互补角与提示词内部编号！`,
+        'success'
+      );
+    } else {
+      onShowToast('当前全部主图卡片均已通过防变形质量预检！', 'info');
+    }
+  };
 
   // Import image from URL into Reference (#Case) pool
   const handleImportImageUrl = async () => {
@@ -523,11 +598,22 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
   };
 
   const openFissionModalForTask = (task: SkuTask) => {
-    const otherProds = prodAssets
-      .filter((p) => !task.productRefIds.includes(p.id))
+    const candidatePool =
+      enabledProdAssets.length > 1 ? enabledProdAssets : prodAssets;
+    const unboundCandidates = candidatePool.filter(
+      (p) => !task.productRefIds.includes(p.id)
+    );
+    // Prefer only hero_front colorway assets by default so structural angle shots (single earbud / bottom closeup) are not mistakenly fissioned as SKU colorways
+    const heroFrontColorways = unboundCandidates
+      .filter((p) => getEffectiveProdRole(p) === 'hero_front')
       .map((p) => p.id);
+    const otherProds = unboundCandidates.map((p) => p.id);
     const defaultSelected =
-      otherProds.length > 0 ? otherProds : prodAssets.map((p) => p.id);
+      heroFrontColorways.length > 0
+        ? heroFrontColorways
+        : otherProds.length > 0
+          ? otherProds
+          : candidatePool.map((p) => p.id);
     setFissionModal({
       open: true,
       sourceTask: task,
@@ -756,32 +842,35 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
             )}
           </section>
 
-          {/* 2. 产品原图 (#Prod) + AI 视角识别 + 套图/裂变双模式切换 */}
+          {/* 2. 产品原图 (#Prod) + 勾选参与开关 + AI 视角识别 + 套图/裂变双模式切换 */}
           <section className="space-y-2.5 pt-2 border-t border-slate-100">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[13px] font-bold text-slate-900">
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[13px] font-bold text-slate-900 whitespace-nowrap shrink-0">
                   2. 自有产品图 (#Prod)
                 </span>
-                <span className="text-[11px] text-slate-400 font-mono-tabular">
-                  ({prodAssets.length}张)
+                <span
+                  className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200/80 text-[10px] font-mono-tabular font-semibold whitespace-nowrap shrink-0"
+                  title={`已勾选启用 ${enabledProdCount} 张 / 共 ${prodAssets.length} 张产品图`}
+                >
+                  {enabledProdCount}/{prodAssets.length}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 shrink-0">
                 {prodAssets.length > 0 && (
                   <button
                     type="button"
                     disabled={isAnalyzingRefs}
                     onClick={onAutoAnalyzeRefs}
                     title="AI 自动识别每张产品图的拍摄视角（正面/开盖/单耳/多色）与花色名称"
-                    className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                    className="h-5.5 px-1.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80 text-[11px] font-semibold flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
                   >
                     {isAnalyzingRefs ? (
                       <Loader2 className="w-3 h-3 animate-spin" />
                     ) : (
                       <ScanEye className="w-3 h-3" />
                     )}
-                    <span>{isAnalyzingRefs ? '识图中' : 'AI识视角/花色'}</span>
+                    <span>{isAnalyzingRefs ? '识图中' : 'AI识图'}</span>
                   </button>
                 )}
                 <button
@@ -793,22 +882,65 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                       selectedIds: [],
                     })
                   }
-                  className="text-[11px] font-medium text-blue-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer"
+                  className="text-[11px] font-medium text-blue-600 hover:text-blue-700 flex items-center gap-0.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <BookmarkCheck className="w-3 h-3" />
+                  <BookmarkCheck className="w-3 h-3 shrink-0" />
                   <span>资产库</span>
                 </button>
                 {prodAssets.length > 0 && (
                   <button
                     type="button"
                     onClick={() => onClearSkuCategoryAssets('product')}
-                    className="text-[11px] text-slate-400 hover:text-rose-600 cursor-pointer"
+                    className="text-[11px] text-slate-400 hover:text-rose-600 whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     清空
                   </button>
                 )}
               </div>
             </div>
+
+            {/* Quick Participation Filter Bar (仅勾选素材参与当前套图或裂变生成) */}
+            {prodAssets.length > 1 && onBatchSetSkuAssetsEnabled && (
+              <div className="flex items-center justify-between gap-1 px-2 py-1 bg-slate-50 border border-slate-200/80 rounded-lg text-[10px]">
+                <span className="text-slate-500 font-medium whitespace-nowrap shrink-0">
+                  勾选生图:
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onBatchSetSkuAssetsEnabled('all')}
+                    className="px-1.5 py-0.5 rounded bg-white hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200/90 font-medium whitespace-nowrap cursor-pointer"
+                    title="全部勾选参与当前工作台排卡与生图"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBatchSetSkuAssetsEnabled('angles_only')}
+                    className="px-1.5 py-0.5 rounded bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 font-semibold whitespace-nowrap cursor-pointer"
+                    title="仅保留第1张主推花色 + 全部结构角度图（开盖/单耳/微距/包装），最适合套图模式防花色打架"
+                  >
+                    仅1款+多角度
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBatchSetSkuAssetsEnabled('patterns_only')}
+                    className="px-1.5 py-0.5 rounded bg-white hover:bg-purple-50 text-purple-700 border border-purple-200 font-medium whitespace-nowrap cursor-pointer"
+                    title="仅勾选各款正面主视图，适合多花色SKU裂变"
+                  >
+                    仅各款花色
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBatchSetSkuAssetsEnabled('invert')}
+                    className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-100 text-slate-600 border border-slate-200/90 whitespace-nowrap cursor-pointer"
+                    title="反向勾选"
+                  >
+                    反选
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div
               onDragOver={(e) => e.preventDefault()}
@@ -817,12 +949,16 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                 onUploadFiles(e.dataTransfer.files, 'product');
               }}
               className={`grid grid-cols-4 gap-2 ${
-                !isProdGridExpanded && prodAssets.length > 8
-                  ? 'max-h-[210px] overflow-y-auto pr-1'
+                isProdGridExpanded && prodAssets.length > 12
+                  ? 'max-h-[340px] overflow-y-auto pr-1'
                   : ''
               }`}
             >
-              {prodAssets.map((prod, idx) => {
+              {(isProdGridExpanded || prodAssets.length <= 7
+                ? prodAssets
+                : prodAssets.slice(0, 7)
+              ).map((prod, idx) => {
+                const isEnabled = prod.enabled !== false;
                 const roleVal = prod.prodAngleRole || 'hero_front';
                 const isSpecialRole = roleVal !== 'hero_front';
                 const roleBadgeColor =
@@ -839,7 +975,12 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                             : 'bg-slate-900/85 text-white';
 
                 return (
-                  <div key={prod.id} className="flex flex-col gap-1">
+                  <div
+                    key={prod.id}
+                    className={`flex flex-col gap-1 transition-opacity ${
+                      isEnabled ? 'opacity-100' : 'opacity-45 grayscale-[30%]'
+                    }`}
+                  >
                     <div
                       onClick={() =>
                         onPreviewImage(
@@ -848,7 +989,11 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                           prod.name
                         )
                       }
-                      className="relative aspect-square rounded-xl overflow-hidden bg-slate-100 border border-slate-200/80 group cursor-zoom-in"
+                      className={`relative aspect-square rounded-xl overflow-hidden bg-slate-100 border group cursor-zoom-in ${
+                        isEnabled
+                          ? 'border-blue-500/70 ring-1 ring-blue-500/20'
+                          : 'border-slate-200/80'
+                      }`}
                     >
                       <img
                         src={prod.previewUrl}
@@ -856,10 +1001,29 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
-                      {/* Clean Index Anchor Badge */}
-                      <span className="absolute top-1 left-1 bg-slate-900/75 text-white text-[9px] font-mono-tabular font-semibold px-1 py-0.5 rounded pointer-events-none">
-                        #{prod.code || `P${idx + 1}`}
-                      </span>
+                      {/* Top-left Compact Participation Checkbox + Short Index */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleSkuAssetEnabled?.(prod.id);
+                        }}
+                        title={
+                          isEnabled
+                            ? `已启用 #${prod.code || `Prod-${idx + 1}`}（点击暂停此图参与排卡生图）`
+                            : `已暂停 #${prod.code || `Prod-${idx + 1}`}（点击重新启用）`
+                        }
+                        className={`absolute top-1 left-1 z-10 h-4 px-1 rounded flex items-center gap-0.5 text-[9px] font-mono-tabular font-bold transition-colors cursor-pointer ${
+                          isEnabled
+                            ? 'bg-blue-600/95 text-white shadow-2xs'
+                            : 'bg-slate-900/70 text-slate-300 hover:bg-slate-900'
+                        }`}
+                      >
+                        <span className="w-2.5 h-2.5 rounded-xs border border-white/80 flex items-center justify-center">
+                          {isEnabled && <Check className="w-2 h-2 stroke-[3]" />}
+                        </span>
+                        <span>#{idx + 1}</span>
+                      </button>
 
                       {/* Angle Role Selector: Hidden by default for standard 'hero_front' to avoid visual clutter; always visible when set to a special angle or on hover */}
                       <div
@@ -898,7 +1062,7 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                           e.stopPropagation();
                           onRemoveSkuAsset(prod.id);
                         }}
-                        className="absolute top-1 right-1 w-4.5 h-4.5 rounded-full bg-slate-900/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-opacity cursor-pointer"
+                        className="absolute top-1 right-1 w-4 h-4 rounded-full bg-slate-900/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-opacity cursor-pointer"
                         title="移除此产品图"
                       >
                         <X className="w-2.5 h-2.5" />
@@ -912,7 +1076,7 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                       }
                       placeholder={`款式/视角 ${idx + 1}`}
                       title="可编辑花色名或视角备注（如：太空芝士鼠·正面）"
-                      className="w-full h-5.5 px-1.5 text-[10px] text-slate-700 bg-slate-50 border border-slate-200/80 rounded-md focus:bg-white focus:outline-none focus:border-slate-900 truncate"
+                      className="w-full h-5 px-1 text-[10px] text-slate-700 bg-slate-50 border border-slate-200/80 rounded-md focus:bg-white focus:outline-none focus:border-slate-900 text-center truncate"
                     />
                   </div>
                 );
@@ -921,24 +1085,24 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
               <button
                 type="button"
                 onClick={() => prodFileInputRef.current?.click()}
-                className="aspect-square rounded-xl border border-dashed border-slate-300 hover:border-slate-500 bg-slate-50/70 hover:bg-slate-100/70 flex flex-col items-center justify-center gap-1 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                className="aspect-square rounded-xl border border-dashed border-slate-300 hover:border-slate-500 bg-slate-50/70 hover:bg-slate-100/70 flex flex-col items-center justify-center gap-0.5 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
                 title="点击或拖拽上传多角度产品实拍图（正面/开盖/单耳/细节）或多花色产品图"
               >
-                <Plus className="w-5 h-5" />
+                <Plus className="w-4 h-4" />
                 <span className="text-[10px] font-medium">添加产品图</span>
               </button>
             </div>
 
-            {prodAssets.length > 8 && (
+            {prodAssets.length > 7 && (
               <button
                 type="button"
                 onClick={() => setIsProdGridExpanded((prev) => !prev)}
-                className="w-full py-1 text-[11px] font-medium text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                className="w-full py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200/60 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
               >
                 <span>
                   {isProdGridExpanded
-                    ? `收起产品图网格 (保持下方策略常驻)`
-                    : `展开全部 ${prodAssets.length} 张产品图 (当前紧凑滚动)`}
+                    ? '收起产品图网格 (仅显示前 2 行)'
+                    : `展开全部 ${prodAssets.length} 张产品图 (其余 ${prodAssets.length - 7} 张已折叠)`}
                 </span>
                 {isProdGridExpanded ? (
                   <ChevronUp className="w-3 h-3" />
@@ -1387,6 +1551,31 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {/* Global Pre-Flight Quality Inspector & 1-Click Auto-Fix Button */}
+            {skuTasks.length > 0 && (
+              <button
+                type="button"
+                onClick={handleAutoFixAllSkuTasks}
+                title={
+                  tasksWithIssuesCount > 0
+                    ? `检测到 ${tasksWithIssuesCount} 张卡片存在配图冲突或提示词编号泄漏，点击一键自动修复全部卡片`
+                    : '全部主图卡片已通过防变形预检（点击可重新扫描并收敛视角配图）'
+                }
+                className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border transition-all cursor-pointer ${
+                  tasksWithIssuesCount > 0
+                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300 shadow-2xs'
+                    : 'bg-emerald-50/80 hover:bg-emerald-100/80 text-emerald-700 border-emerald-200'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  {tasksWithIssuesCount > 0
+                    ? `一键修复冲突 (${tasksWithIssuesCount})`
+                    : '防变形预检通过'}
+                </span>
+              </button>
+            )}
+
             {/* View Mode Segmented Switcher: 双栏精修 vs 5列橱窗总览 */}
             {skuTasks.length > 0 && (
               <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/80">
@@ -2174,29 +2363,60 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                           </button>
                         )}
                         {onExtendReplicaToDetail && (
-                          <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                          <div
+                            className={`inline-flex items-center rounded-lg border overflow-hidden ${
+                              task.resultImageUrl
+                                ? 'border-amber-300 bg-amber-50/90'
+                                : 'border-slate-200 bg-slate-50'
+                            }`}
+                          >
                             <button
                               type="button"
                               onClick={() =>
                                 onExtendReplicaToDetail('3:4', task, true)
                               }
-                              title="将本张主图直接流转为 ② 详情页工作台的 3:4 竖版分屏"
-                              className="h-7 px-2 hover:bg-slate-200/70 text-[11px] font-medium text-slate-700 cursor-pointer border-r border-slate-200"
+                              title={
+                                task.resultImageUrl
+                                  ? '以当前满意主图成图为视觉基准锚点，无缝延展为 ② 详情页工作台 3:4 首屏或分屏'
+                                  : '将本张主图配方流转为 ② 详情页工作台的 3:4 竖版分屏'
+                              }
+                              className={`h-7 px-2 text-[11px] font-medium cursor-pointer border-r ${
+                                task.resultImageUrl
+                                  ? 'hover:bg-amber-100/80 text-amber-900 border-amber-200 font-semibold'
+                                  : 'hover:bg-slate-200/70 text-slate-700 border-slate-200'
+                              }`}
                             >
-                              转3:4详情
+                              {task.resultImageUrl ? '🔗同源延展3:4' : '转3:4详情'}
                             </button>
                             <button
                               type="button"
                               onClick={() =>
                                 onExtendReplicaToDetail('9:16', task, true)
                               }
-                              title="将本张主图直接流转为 ② 详情页工作台的 9:16 手机全屏竖版分屏"
-                              className="h-7 px-2 hover:bg-slate-200/70 text-[11px] font-medium text-slate-700 cursor-pointer"
+                              title={
+                                task.resultImageUrl
+                                  ? '以当前满意主图成图为视觉基准锚点，无缝延展为 ② 详情页工作台 9:16 手机全屏首屏或分屏'
+                                  : '将本张主图配方流转为 ② 详情页工作台的 9:16 手机全屏竖版分屏'
+                              }
+                              className={`h-7 px-2 text-[11px] font-medium cursor-pointer ${
+                                task.resultImageUrl
+                                  ? 'hover:bg-amber-100/80 text-amber-900 font-semibold'
+                                  : 'hover:bg-slate-200/70 text-slate-700'
+                              }`}
                             >
-                              转9:16长屏
+                              {task.resultImageUrl ? '9:16长屏' : '转9:16长屏'}
                             </button>
                           </div>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => setInspectingPayloadTaskId(task.id)}
+                          title="生图前真实投喂透视镜：查看实际传给生图模型的图片顺序、已过滤冗余图与防变形护栏指令"
+                          className="h-7 px-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                        >
+                          <ScanEye className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>透视</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => onGenerateSingleSkuImage(task)}
@@ -2232,13 +2452,13 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                     </div>
 
                     {/* Visual Comparison Row: [参考图 + 多角度产品原图] ---> [自适应比例复刻结果图 + 历史版本条] */}
-                    <div className="grid grid-cols-12 gap-3 items-center bg-slate-50/80 border border-slate-200/60 rounded-xl p-3">
+                    <div className="grid grid-cols-12 gap-3 items-stretch bg-slate-50/80 border border-slate-200/60 rounded-xl p-3">
                       {/* Left 5 cols: Source Inputs (#Case + Multi-Angle #Prod) */}
-                      <div className="col-span-5 flex flex-col gap-2">
+                      <div className="col-span-5 flex flex-col justify-between gap-2">
                         <div className="grid grid-cols-2 gap-2">
                           {/* Bound Case */}
                           <div className="space-y-1">
-                            <span className="block text-[10px] font-semibold text-slate-500">
+                            <span className="block text-[10px] font-semibold text-slate-500 truncate">
                               参考图 {boundCase ? `(#${boundCase.code})` : ''}
                             </span>
                             {boundCase ? (
@@ -2323,7 +2543,7 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                         </div>
 
                         {/* Quick Switchers for Bound Case & Multi-Select #Prod Buttons */}
-                        <div className="space-y-1.5 pt-1">
+                        <div className="flex-1 flex flex-col justify-end space-y-1.5 pt-0.5">
                           {caseAssets.length > 1 && (
                             <select
                               value={boundCase?.id || ''}
@@ -2334,7 +2554,7 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                                     : [],
                                 })
                               }
-                              className="w-full h-7 px-2 text-[11px] bg-white border border-slate-200 rounded-md text-slate-700"
+                              className="w-full h-6.5 px-2 text-[11px] bg-white border border-slate-200 rounded-md text-slate-700"
                             >
                               {caseAssets.map((c, cIdx) => (
                                 <option key={c.id} value={c.id}>
@@ -2346,36 +2566,86 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
 
                           {prodAssets.length > 1 && (
                             <div className="space-y-1">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-medium text-slate-500">
-                                  点选本卡所需角度/款式:
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const allSelected =
-                                      effectiveBoundProds.length ===
-                                      Math.min(5, prodAssets.length);
-                                    onUpdateSkuTask(task.id, {
-                                      productRefIds: allSelected
-                                        ? [prodAssets[0].id]
-                                        : prodAssets
-                                            .slice(0, 5)
-                                            .map((p) => p.id),
-                                    });
-                                  }}
-                                  className="text-[10px] font-semibold text-blue-600 hover:text-blue-700 cursor-pointer"
-                                >
-                                  {effectiveBoundProds.length > 1
-                                    ? '仅留首图'
-                                    : '全选全家福'}
-                                </button>
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <span className="text-[10px] font-semibold text-slate-600 whitespace-nowrap">
+                                    点选视角/款式
+                                  </span>
+                                  {skuQualityMap.get(task.id)?.passed && (
+                                    <span
+                                      className="px-1 py-0.2 rounded bg-emerald-50 border border-emerald-200/90 text-emerald-700 text-[9px] font-medium whitespace-nowrap"
+                                      title="生图预检通过：无内部编号污染，无异款花色打架"
+                                    >
+                                      ✓预检通过
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const picked = smartPickComplementaryProds(
+                                        {
+                                          skuDiffMode: task.skuDiffMode,
+                                          title: task.skuTitle,
+                                          prompt: task.visualPrompt,
+                                          refCaseTitle: boundCase?.tag,
+                                          refCaseRule:
+                                            boundCase?.caseCustomRule,
+                                          enabledProds: enabledProdAssets,
+                                          preferredPrimaryProdId:
+                                            boundProd?.id,
+                                        }
+                                      );
+                                      if (picked.length > 0) {
+                                        onUpdateSkuTask(task.id, {
+                                          productRefIds: picked.map(
+                                            (p) => p.id
+                                          ),
+                                        });
+                                        onShowToast(
+                                          `已根据 #Case 参考姿态与主题智能匹配 ${picked.length} 张互补视角（防异款花色打架）`,
+                                          'success'
+                                        );
+                                      }
+                                    }}
+                                    title="AI根据本卡 #Case 参考图姿态与主题，自动从已启用产品图中挑选1~2张互补角度（如正面+开盖/单耳），杜绝多花色打架变形"
+                                    className="text-[10px] font-semibold text-emerald-700 hover:text-emerald-800 whitespace-nowrap cursor-pointer"
+                                  >
+                                    ✨AI配互补角
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const allSelected =
+                                        effectiveBoundProds.length > 1;
+                                      onUpdateSkuTask(task.id, {
+                                        productRefIds: allSelected
+                                          ? [
+                                              (
+                                                enabledProdAssets[0] ||
+                                                prodAssets[0]
+                                              ).id,
+                                            ]
+                                          : enabledProdAssets
+                                              .slice(0, 5)
+                                              .map((p) => p.id),
+                                      });
+                                    }}
+                                    className="text-[10px] font-semibold text-blue-600 hover:text-blue-700 whitespace-nowrap cursor-pointer"
+                                  >
+                                    {effectiveBoundProds.length > 1
+                                      ? '仅留首图'
+                                      : '全家福'}
+                                  </button>
+                                </div>
                               </div>
-                              <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto pr-0.5">
+                              <div className="grid grid-cols-2 gap-1 max-h-[112px] overflow-y-auto p-1 bg-white/90 border border-slate-200/80 rounded-lg">
                                 {prodAssets.map((p, pIdx) => {
                                   const isSelected = effectiveBoundProds.some(
                                     (bp) => bp.id === p.id
                                   );
+                                  const isProdEnabled = p.enabled !== false;
                                   const roleOption =
                                     PROD_ANGLE_ROLE_OPTIONS.find(
                                       (o) => o.value === p.prodAngleRole
@@ -2392,17 +2662,19 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                                     (isSpecialAngle
                                       ? roleOption?.shortLabel
                                       : '') ||
-                                    `P${pIdx + 1}`;
+                                    `产品${pIdx + 1}`;
                                   return (
                                     <button
                                       key={p.id}
                                       type="button"
                                       onClick={() => toggleCardProdRef(p.id)}
-                                      title={`#${p.code || `P${pIdx + 1}`} ${p.tag || `商品${pIdx + 1}`}${roleOption ? ` · ${roleOption.label}` : ''}（点击可多选组合）`}
-                                      className={`h-6 pl-1 pr-1.5 rounded-md border text-[10px] flex items-center gap-1 transition-all cursor-pointer ${
+                                      title={`#${p.code || `P${pIdx + 1}`} ${p.tag || `商品${pIdx + 1}`}${roleOption ? ` · ${roleOption.label}` : ''}${!isProdEnabled ? ' (左侧未启用)' : ''}（点击可多选组合）`}
+                                      className={`h-6.5 px-1.5 rounded-md border text-[10px] flex items-center gap-1 min-w-0 transition-all cursor-pointer ${
                                         isSelected
                                           ? 'border-blue-600 bg-blue-50 text-blue-700 font-semibold shadow-2xs'
-                                          : 'border-slate-200 bg-white text-slate-600 opacity-75 hover:opacity-100 hover:border-slate-300'
+                                          : isProdEnabled
+                                            ? 'border-slate-200/90 bg-slate-50/60 text-slate-600 hover:bg-white hover:border-slate-300'
+                                            : 'border-slate-200/50 bg-slate-100/50 text-slate-400 opacity-50 hover:opacity-85'
                                       }`}
                                     >
                                       <img
@@ -2411,10 +2683,10 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                                         referrerPolicy="no-referrer"
                                         className="w-4 h-4 rounded-xs object-cover shrink-0"
                                       />
-                                      <span className="font-mono-tabular text-[9px] opacity-75">
+                                      <span className="font-mono-tabular text-[9px] opacity-75 shrink-0">
                                         #{pIdx + 1}
                                       </span>
-                                      <span className="truncate max-w-[68px]">
+                                      <span className="truncate flex-1 text-left">
                                         {shortText}
                                       </span>
                                     </button>
@@ -2423,6 +2695,43 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                               </div>
                             </div>
                           )}
+
+                          {/* Per-Card Pre-Flight Quality Warning & 1-Click Auto-Fix Bar (Only shown when conflict detected) */}
+                          {(() => {
+                            const q = skuQualityMap.get(task.id);
+                            if (!q || q.passed) return null;
+                            return (
+                              <div className="px-2 py-1 rounded-md bg-amber-50 border border-amber-300/90 flex items-center justify-between gap-1">
+                                <span className="text-[10px] font-bold text-amber-900 truncate">
+                                  {q.issues.map((i) => i.label).join(' · ')}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const fixed = autoFixSkuTaskQuality(
+                                      task,
+                                      prodAssets,
+                                      caseAssets
+                                    );
+                                    onUpdateSkuTask(task.id, {
+                                      productRefIds: fixed.productRefIds,
+                                      visualPrompt: fixed.visualPrompt,
+                                      typographyPlan: fixed.typographyPlan,
+                                      sellingPointBadge:
+                                        fixed.sellingPointBadge,
+                                    });
+                                    onShowToast(
+                                      `已自动修复 #${String(task.skuIndex).padStart(2, '0')} 的配图、参考姿态互补角与提示词冲突！`,
+                                      'success'
+                                    );
+                                  }}
+                                  className="px-1.5 py-0.5 rounded bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-semibold shrink-0 cursor-pointer"
+                                >
+                                  ⚡一键修复
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
 
@@ -2569,33 +2878,68 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                       </div>
                     </div>
 
-                    {/* 🔒 Lock Current Result for Local Refinement Input Bar */}
+                    {/* 🔒 Lock Current Result for Local Refinement Input Bar + High-Weight Rescue Chips */}
                     {task.resultImageUrl && task.lockResultAsRef && (
-                      <div className="rounded-xl bg-amber-50/90 border border-amber-300/90 p-2.5 flex items-center gap-2">
-                        <span className="text-[11px] font-bold text-amber-900 flex items-center gap-1 shrink-0">
-                          <Lock className="w-3.5 h-3.5 text-amber-600" />
-                          <span>锁当前成图微调:</span>
-                        </span>
-                        <input
-                          type="text"
-                          value={task.refineInstruction || ''}
-                          onChange={(e) =>
-                            onUpdateSkuTask(task.id, {
-                              refineInstruction: e.target.value,
-                            })
-                          }
-                          placeholder="输入局部修改指令（如：保持当前构图和耳机不变，把顶部标题大字改成亮黄色、去掉右下角多余星星）..."
-                          className="flex-1 h-7 px-2.5 text-xs bg-white border border-amber-300 rounded-lg focus:outline-none focus:border-amber-600 text-slate-900 placeholder:text-slate-400"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => onGenerateSingleSkuImage(task)}
-                          disabled={isGenerating}
-                          className="h-7 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer shrink-0 disabled:opacity-50"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          <span>执行微调</span>
-                        </button>
+                      <div className="rounded-xl bg-amber-50/90 border border-amber-300/90 p-2.5 space-y-2">
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className="text-[10px] font-bold text-amber-900 mr-0.5 shrink-0">
+                            ⚡ 一键救图指令:
+                          </span>
+                          {QUICK_REFINE_RESCUE_CHIPS.map((chip) => {
+                            const active = (
+                              task.refineInstruction || ''
+                            ).includes(chip.directive);
+                            return (
+                              <button
+                                key={chip.id}
+                                type="button"
+                                onClick={() =>
+                                  onUpdateSkuTask(task.id, {
+                                    refineInstruction:
+                                      toggleRefineChipInstruction(
+                                        task.refineInstruction,
+                                        chip.directive
+                                      ),
+                                  })
+                                }
+                                title={chip.directive}
+                                className={`h-5.5 px-2 rounded-md border text-[10px] font-semibold transition-all cursor-pointer ${
+                                  active
+                                    ? 'bg-amber-600 text-white border-amber-700 shadow-2xs'
+                                    : 'bg-white hover:bg-amber-100/80 text-amber-900 border-amber-200'
+                                }`}
+                              >
+                                {chip.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold text-amber-900 flex items-center gap-1 shrink-0">
+                            <Lock className="w-3.5 h-3.5 text-amber-600" />
+                            <span>锁成图微调:</span>
+                          </span>
+                          <input
+                            type="text"
+                            value={task.refineInstruction || ''}
+                            onChange={(e) =>
+                              onUpdateSkuTask(task.id, {
+                                refineInstruction: e.target.value,
+                              })
+                            }
+                            placeholder="点选上方一键救图指令，或输入局部修改要求（保持构图不变，仅改局部）..."
+                            className="flex-1 h-7 px-2.5 text-xs bg-white border border-amber-300 rounded-lg focus:outline-none focus:border-amber-600 text-slate-900 placeholder:text-slate-400"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => onGenerateSingleSkuImage(task)}
+                            disabled={isGenerating}
+                            className="h-7 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer shrink-0 disabled:opacity-50"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            <span>执行微调</span>
+                          </button>
+                        </div>
                       </div>
                     )}
 
@@ -3014,34 +3358,84 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
               )}
 
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-700">
-                    2. 勾选要裂变出的目标产品花色 ({fissionModal.selectedProdIds.length}/{prodAssets.length})：
+                    2. 勾选要裂变出的目标产品花色 ({fissionModal.selectedProdIds.length}/{prodAssets.length}，已自动过滤非花色特写图)：
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const allIds = prodAssets.map((p) => p.id);
-                      setFissionModal((prev) => ({
-                        ...prev,
-                        selectedProdIds:
-                          prev.selectedProdIds.length === allIds.length
-                            ? []
-                            : allIds,
-                      }));
-                    }}
-                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 cursor-pointer"
-                  >
-                    {fissionModal.selectedProdIds.length === prodAssets.length
-                      ? '取消全选'
-                      : '全选所有产品图'}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sourceBound =
+                          fissionModal.sourceTask?.productRefIds || [];
+                        const colorwayIds = prodAssets
+                          .filter(
+                            (p) =>
+                              !sourceBound.includes(p.id) &&
+                              getEffectiveProdRole(p) === 'hero_front'
+                          )
+                          .map((p) => p.id);
+                        setFissionModal((prev) => ({
+                          ...prev,
+                          selectedProdIds: colorwayIds,
+                        }));
+                      }}
+                      className="px-2 py-0.5 rounded bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[11px] font-semibold text-blue-700 cursor-pointer"
+                    >
+                      仅选各款花色正面
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sourceBound =
+                          fissionModal.sourceTask?.productRefIds || [];
+                        const enabledColorways = prodAssets
+                          .filter(
+                            (p) =>
+                              p.enabled !== false &&
+                              !sourceBound.includes(p.id) &&
+                              getEffectiveProdRole(p) === 'hero_front'
+                          )
+                          .map((p) => p.id);
+                        setFissionModal((prev) => ({
+                          ...prev,
+                          selectedProdIds: enabledColorways,
+                        }));
+                      }}
+                      className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] font-semibold text-slate-700 cursor-pointer"
+                    >
+                      仅选左侧已启用花色
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allIds = prodAssets.map((p) => p.id);
+                        setFissionModal((prev) => ({
+                          ...prev,
+                          selectedProdIds:
+                            prev.selectedProdIds.length === allIds.length
+                              ? []
+                              : allIds,
+                        }));
+                      }}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
+                    >
+                      {fissionModal.selectedProdIds.length === prodAssets.length
+                        ? '清空'
+                        : '全选'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-4 gap-2.5">
                   {prodAssets.map((prod, idx) => {
                     const selected = fissionModal.selectedProdIds.includes(
                       prod.id
+                    );
+                    const role = getEffectiveProdRole(prod);
+                    const isColorwayFront = role === 'hero_front';
+                    const roleMeta = PROD_ANGLE_ROLE_OPTIONS.find(
+                      (o) => o.value === role
                     );
                     return (
                       <button
@@ -3060,7 +3454,9 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                         className={`p-1.5 rounded-xl border text-left transition-all cursor-pointer ${
                           selected
                             ? 'border-blue-600 bg-blue-50/50 ring-1 ring-blue-600'
-                            : 'border-slate-200 hover:border-slate-300 opacity-75'
+                            : isColorwayFront
+                              ? 'border-slate-200 hover:border-slate-300 opacity-85'
+                              : 'border-slate-200/60 bg-slate-50 opacity-50'
                         }`}
                       >
                         <div className="aspect-square rounded-lg overflow-hidden bg-slate-100 relative">
@@ -3069,6 +3465,15 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
                             alt={prod.tag}
                             className="w-full h-full object-cover"
                           />
+                          <span
+                            className={`absolute bottom-1 left-1 px-1 py-0.2 rounded text-[9px] font-semibold ${
+                              isColorwayFront
+                                ? 'bg-slate-900/75 text-white'
+                                : 'bg-amber-600/85 text-white'
+                            }`}
+                          >
+                            {roleMeta?.shortLabel || '正面花色'}
+                          </span>
                           {selected && (
                             <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center">
                               <Check className="w-2.5 h-2.5" />
@@ -3281,6 +3686,201 @@ export const SkuStudioView: React.FC<SkuStudioViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Pre-Flight Payload & Prompt Inspector Modal */}
+      {(() => {
+        const targetTask = skuTasks.find(
+          (t) => t.id === inspectingPayloadTaskId
+        );
+        if (!targetTask) return null;
+        const preview = buildSkuPayloadPreview({
+          task: targetTask,
+          allProds: prodAssets,
+          allCases: caseAssets,
+          defaultFidelity: replicaFidelity,
+          defaultStyleLinkageMode: styleLinkageMode,
+        });
+        const quality = skuQualityMap.get(targetTask.id);
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+                <div className="flex items-center gap-2 min-w-0">
+                  <ScanEye className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <h3 className="text-sm font-bold text-slate-900 truncate">
+                    生图前真实投喂透视镜 · 主图 #{String(targetTask.skuIndex).padStart(2, '0')} ({targetTask.skuTitle})
+                  </h3>
+                  {preview.filteredOutCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-semibold shrink-0">
+                      已自动隔离 {preview.filteredOutCount} 张冗余产品图
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInspectingPayloadTaskId(null)}
+                  className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-4 text-xs">
+                {/* Quality Warning inside Inspector if any */}
+                {quality && !quality.passed && (
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 flex items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-amber-900 flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 text-amber-600" />
+                        <span>检测到 {quality.issues.length} 项生图前潜在冲突：</span>
+                      </div>
+                      <ul className="text-[11px] text-amber-800 list-disc list-inside">
+                        {quality.issues.map((iss, idx) => (
+                          <li key={idx}>
+                            <span className="font-semibold">{iss.label}：</span>
+                            {iss.detail}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const fixed = autoFixSkuTaskQuality(
+                          targetTask,
+                          prodAssets,
+                          caseAssets
+                        );
+                        onUpdateSkuTask(targetTask.id, {
+                          productRefIds: fixed.productRefIds,
+                          visualPrompt: fixed.visualPrompt,
+                          typographyPlan: fixed.typographyPlan,
+                          sellingPointBadge: fixed.sellingPointBadge,
+                        });
+                        onShowToast('已完成一键修复，透视镜已实时更新！', 'success');
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold shrink-0 cursor-pointer"
+                    >
+                      ⚡ 一键修复冲突
+                    </button>
+                  </div>
+                )}
+
+                {/* 1. Ordered Image Slots Actually Sent to Image Model */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-900">
+                      1. 实际投喂给生图模型的图片序列（共 {preview.imageSlots.length} 张，按权重从高到低排序）
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {preview.modeLabel}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {preview.imageSlots.map((slot) => (
+                      <div
+                        key={slot.order}
+                        className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/70 flex items-start gap-2.5"
+                      >
+                        <img
+                          src={slot.previewUrl}
+                          alt={slot.tag}
+                          referrerPolicy="no-referrer"
+                          onClick={() =>
+                            onPreviewImage(
+                              slot.previewUrl,
+                              `投喂槽位 #${slot.order}: ${slot.roleBadge}`
+                            )
+                          }
+                          className="w-14 h-14 rounded-lg object-cover border border-slate-200 shrink-0 cursor-zoom-in bg-white"
+                        />
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-center gap-1">
+                            <span className="px-1.5 py-0.5 rounded bg-slate-900 text-white text-[10px] font-bold">
+                              图#{slot.order}
+                            </span>
+                            <span className="text-[10px] font-semibold text-indigo-700 truncate">
+                              {slot.angleRoleLabel || slot.code}
+                            </span>
+                          </div>
+                          <div className="font-bold text-slate-800 truncate text-[11px]" title={slot.roleBadge}>
+                            {slot.roleBadge}
+                          </div>
+                          <div className="text-[10px] text-slate-500 truncate" title={slot.ruleDesc}>
+                            {slot.tag}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. Active Anti-Deformation & Style Guardrails */}
+                <div className="space-y-1.5">
+                  <div className="font-bold text-slate-900">
+                    2. 已激活的底层防变形与色彩护栏（共 {preview.activeGuardrails.length} 项）
+                  </div>
+                  <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/90 space-y-1">
+                    {preview.activeGuardrails.map((g, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center gap-1.5 text-[11px] text-emerald-950 font-medium"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>{g}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Sanitized Prompt & Copywriting */}
+                <div className="space-y-1.5">
+                  <div className="font-bold text-slate-900">
+                    3. 净化后实际下发的画面描述与分层文案（已自动剥离 #Prod/#Case 内部编号与药丸禁用词）
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900 text-slate-100 font-mono text-[11px] space-y-1.5 leading-relaxed">
+                    <div>
+                      <span className="text-amber-400 font-semibold">[主标题与卖点] </span>
+                      {preview.sanitizedCopywriting || '（无标题）'}
+                    </div>
+                    <div>
+                      <span className="text-emerald-400 font-semibold">[净化后画面指令] </span>
+                      {preview.compiledPositivePrompt || '（按默认复刻规范执行）'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-slate-500">
+                  确认上方投喂图槽位与净化指令无误后，可直接触发本卡生图
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setInspectingPayloadTaskId(null)}
+                    className="px-3.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  >
+                    关闭
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const taskToRun = targetTask;
+                      setInspectingPayloadTaskId(null);
+                      onGenerateSingleSkuImage(taskToRun);
+                    }}
+                    className="px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-black text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span>立即按此投喂生图</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

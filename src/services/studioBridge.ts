@@ -94,6 +94,14 @@ export const DEFAULT_AGENT_MODEL_PRESETS: ModelPresetItem[] = [
     description: '擅长细腻电商文案排版与视觉导演脚本编写',
     isBuiltIn: true,
   },
+  {
+    id: 'codex-mini-latest',
+    label: 'codex-mini-latest (本地 Codex CLI 协同)',
+    category: 'agent',
+    protocolHint: 'codex-cli',
+    description: '通过本地 Codex CLI 进程或内置模型桥接执行多模态策划与对话',
+    isBuiltIn: true,
+  },
 ];
 
 /**
@@ -159,6 +167,20 @@ export function normalizeEndpointPreview(
   effectiveProtocolLabel: string;
 } {
   const trimmed = (rawUrl || '').trim();
+  if (protocol === 'codex-cli' || /^codex:\/\//i.test(trimmed)) {
+    const cliTarget =
+      trimmed && !/^codex:\/\//i.test(trimmed)
+        ? trimmed
+        : 'codex://local (本地 Codex CLI 进程 + 内置多模态模型桥接)';
+    return {
+      cleanRoot: cliTarget,
+      geminiNativeEndpoint: `codex exec -m ${agentModel} "<多模态策划提示词>" (支持本地 ~/.codex 配置与内置模型自动桥接)`,
+      openAiChatEndpoint: `本地 Codex CLI 子进程调用 / 内置 ${agentModel} 对话引擎`,
+      openAiImageEndpoint: `本地 Codex CLI 协同 → 内置 ${imageModel} 高清生图引擎`,
+      effectiveProtocolLabel:
+        '本地 Codex CLI 通道 (支持 CLI 进程调用与内置模型对话/生图无感桥接)',
+    };
+  }
   if (!trimmed) {
     return {
       cleanRoot: '内置服务端直连通道 (无需配置外部域名)',
@@ -649,12 +671,35 @@ export const studioBridge = {
       error?: string;
     }>('/api/oss/upload', 'studio:oss-upload', payload),
 
+  getCodexCliStatus: (payload?: {
+    cliCommand?: string;
+    customBaseUrl?: string;
+    customApiKey?: string;
+  }) =>
+    callStudioBackend<{
+      ok: boolean;
+      cliInstalled: boolean;
+      cliCommand: string;
+      cliVersion: string;
+      configPath: string | null;
+      configFound: boolean;
+      authConfigured: boolean;
+      detectedProvider?: string;
+      detectedBaseUrl?: string;
+      builtInBridgeReady: boolean;
+      builtInAgentModels: string[];
+      builtInImageModels: string[];
+      message: string;
+    }>('/api/codex/status', 'studio:codex-status', payload || {}),
+
   testChannel: (payload: {
     customBaseUrl?: string;
     customApiKey?: string;
     customHeaders?: string;
     protocol?: ApiProtocolMode;
     agentModel?: string;
+    cliCommand?: string;
+    cliExtraArgs?: string;
   }) =>
     callStudioBackend<{
       ok: boolean;

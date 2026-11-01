@@ -1,6 +1,9 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
+import fs from "fs";
+import os from "os";
+import { execFile } from "child_process";
 import crypto from "crypto";
 import OSS from "ali-oss";
 import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
@@ -1020,7 +1023,259 @@ async function resolveReferenceInlineImage(
   return null;
 }
 
-export type ApiProtocolMode = "auto" | "gemini-native" | "openai-compatible";
+export type ApiProtocolMode =
+  | "auto"
+  | "gemini-native"
+  | "openai-compatible"
+  | "codex-cli";
+
+interface LocalCodexConfigSummary {
+  cliInstalled: boolean;
+  cliCommand: string;
+  cliVersion: string;
+  configPath: string | null;
+  configFound: boolean;
+  authConfigured: boolean;
+  detectedProvider?: string;
+  detectedBaseUrl?: string;
+  detectedApiKey?: string;
+  detectedModel?: string;
+  builtInBridgeReady: boolean;
+}
+
+/**
+ * Inspects local Codex CLI installation (`codex --version`) and `~/.codex/` config/auth files,
+ * while also checking built-in model engine availability.
+ */
+async function inspectLocalCodexCliConfig(
+  customCliCommand?: string
+): Promise<LocalCodexConfigSummary> {
+  const rawCmd = (customCliCommand || "codex").trim();
+  const cmdParts = rawCmd.split(/\s+/).filter(Boolean);
+  const binName = cmdParts[0] || "codex";
+
+  const homeDir = os.homedir();
+  const codexDir = path.join(homeDir, ".codex");
+  const configTomlPath = path.join(codexDir, "config.toml");
+  const configJsonPath = path.join(codexDir, "config.json");
+  const authJsonPath = path.join(codexDir, "auth.json");
+
+  let configPath: string | null = null;
+  let configFound = false;
+  let detectedProvider: string | undefined;
+  let detectedBaseUrl: string | undefined;
+  let detectedApiKey: string | undefined;
+  let detectedModel: string | undefined;
+
+  try {
+    if (fs.existsSync(configTomlPath)) {
+      configPath = configTomlPath;
+      configFound = true;
+      const tomlContent = fs.readFileSync(configTomlPath, "utf8");
+      const modelMatch = tomlContent.match(/^\s*model\s*=\s*["']([^"']+)["']/m);
+      const providerMatch = tomlContent.match(
+        /^\s*model_provider\s*=\s*["']([^"']+)["']/m
+      );
+      const baseUrlMatch = tomlContent.match(
+        /^\s*base_url\s*=\s*["']([^"']+)["']/m
+      );
+      const apiKeyMatch = tomlContent.match(
+        /^\s*(?:api_key|experimental_bearer_token)\s*=\s*["']([^"']+)["']/m
+      );
+      if (modelMatch?.[1]) detectedModel = modelMatch[1].trim();
+      if (providerMatch?.[1]) detectedProvider = providerMatch[1].trim();
+      if (baseUrlMatch?.[1]) detectedBaseUrl = baseUrlMatch[1].trim();
+      if (apiKeyMatch?.[1]) detectedApiKey = apiKeyMatch[1].trim();
+    } else if (fs.existsSync(configJsonPath)) {
+      configPath = configJsonPath;
+      configFound = true;
+      const parsed = JSON.parse(fs.readFileSync(configJsonPath, "utf8"));
+      if (parsed?.model) detectedModel = String(parsed.model).trim();
+      if (parsed?.provider || parsed?.model_provider) {
+        detectedProvider = String(
+          parsed.provider || parsed.model_provider
+        ).trim();
+      }
+      if (parsed?.baseUrl || parsed?.base_url) {
+        detectedBaseUrl = String(parsed.baseUrl || parsed.base_url).trim();
+      }
+      if (parsed?.apiKey || parsed?.api_key) {
+        detectedApiKey = String(parsed.apiKey || parsed.api_key).trim();
+      }
+    }
+
+    if (fs.existsSync(authJsonPath)) {
+      if (!configPath) configPath = authJsonPath;
+      configFound = true;
+      const authParsed = JSON.parse(fs.readFileSync(authJsonPath, "utf8"));
+      const keyCandidate =
+        authParsed?.OPENAI_API_KEY ||
+        authParsed?.api_key ||
+        authParsed?.apiKey ||
+        authParsed?.tokens?.access_token;
+      if (keyCandidate && typeof keyCandidate === "string") {
+        detectedApiKey = keyCandidate.trim();
+      }
+    }
+  } catch {
+    // Ignore local ~/.codex parse errors
+  }
+
+  if (!detectedApiKey) {
+    detectedApiKey =
+      process.env.CODEX_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      undefined;
+  }
+
+  const cliCheck = await new Promise<{ installed: boolean; version: string }>(
+    (resolve) => {
+      execFile(
+        binName,
+        ["--version"],
+        { timeout: 3000 },
+        (err, stdout, stderr) => {
+          if (err) {
+            resolve({ installed: false, version: "" });
+            return;
+          }
+          const ver = `${stdout || ""} ${stderr || ""}`.trim().split(/\r?\n/)[0];
+          resolve({
+            installed: true,
+            version: ver || "codex-cli",
+          });
+        }
+      );
+    }
+  );
+
+  const builtInBridgeReady = Boolean(
+    process.env.GEMINI_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      detectedApiKey
+  );
+
+  return {
+    cliInstalled: cliCheck.installed,
+    cliCommand: rawCmd,
+    cliVersion: cliCheck.version,
+    configPath,
+    configFound,
+    authConfigured: Boolean(detectedApiKey),
+    detectedProvider: detectedProvider || "builtin-studio-bridge",
+    detectedBaseUrl,
+    detectedApiKey,
+    detectedModel,
+    builtInBridgeReady,
+  };
+}
+
+/**
+ * Executes local `codex` CLI binary non-interactively (`codex exec`) with optional temporary image files.
+ */
+async function executeLocalCodexCliBinary(options: {
+  prompt: string;
+  model: string;
+  parts: any[];
+  cliCommand?: string;
+  customBaseUrl?: string;
+  customApiKey?: string;
+}): Promise<string> {
+  const { prompt, model, parts, cliCommand, customBaseUrl, customApiKey } =
+    options;
+  const rawCmd = (cliCommand || "codex").trim();
+  const tokens = rawCmd.split(/\s+/).filter(Boolean);
+  const bin = tokens[0] || "codex";
+  const userExtraArgs = tokens.slice(1);
+
+  const tempFiles: string[] = [];
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (part?.inlineData?.data) {
+        const mime = part.inlineData.mimeType || "image/jpeg";
+        const ext = mime.includes("png")
+          ? "png"
+          : mime.includes("webp")
+            ? "webp"
+            : "jpg";
+        const tmpFile = path.join(
+          os.tmpdir(),
+          `codex-ref-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}.${ext}`
+        );
+        fs.writeFileSync(tmpFile, Buffer.from(part.inlineData.data, "base64"));
+        tempFiles.push(tmpFile);
+      }
+    }
+
+    const args: string[] = [];
+    if (!userExtraArgs.includes("exec") && !userExtraArgs.includes("-q")) {
+      args.push("exec");
+    }
+    args.push(...userExtraArgs);
+    if (model && !args.includes("-m") && !args.includes("--model")) {
+      args.push("-m", model);
+    }
+    if (!args.includes("--skip-git-repo-check")) {
+      args.push("--skip-git-repo-check");
+    }
+    for (const imgPath of tempFiles) {
+      args.push("-i", imgPath);
+    }
+    args.push(prompt);
+
+    const envVars: NodeJS.ProcessEnv = { ...process.env };
+    if (customApiKey && customApiKey.trim()) {
+      envVars.OPENAI_API_KEY = customApiKey.trim();
+      envVars.CODEX_API_KEY = customApiKey.trim();
+      envVars.GEMINI_API_KEY = customApiKey.trim();
+    }
+    if (
+      customBaseUrl &&
+      customBaseUrl.trim() &&
+      !/^codex:\/\//i.test(customBaseUrl.trim())
+    ) {
+      envVars.OPENAI_BASE_URL = customBaseUrl.trim();
+    }
+
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        bin,
+        args,
+        {
+          timeout: 95000,
+          maxBuffer: 20 * 1024 * 1024,
+          env: envVars,
+        },
+        (err, out, stderr) => {
+          if (err) {
+            reject(
+              new Error(
+                (stderr || err.message || "Codex CLI 执行失败").trim()
+              )
+            );
+            return;
+          }
+          resolve((out || "").trim());
+        }
+      );
+    });
+
+    if (!stdout) {
+      throw new Error("Codex CLI 返回空输出");
+    }
+    return stdout;
+  } finally {
+    for (const f of tempFiles) {
+      try {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      } catch {
+        // Ignore temp file cleanup errors
+      }
+    }
+  }
+}
 
 interface NormalizedEndpointInfo {
   rawUrl: string;
@@ -1034,13 +1289,14 @@ interface NormalizedEndpointInfo {
 
 /**
  * Broadly normalizes any user-supplied endpoint URL:
- * Supports empty (official), bare host, trailing slashes, /v1, /v1beta,
+ * Supports empty (official), codex://local, bare host, trailing slashes, /v1, /v1beta,
  * /v1/chat/completions, /v1/images/generations, /v1beta/models/...
  */
 function normalizeUniversalEndpoint(rawBaseUrl?: string): NormalizedEndpointInfo {
   const trimmed = (rawBaseUrl || "").trim();
   const isPlaceholderUrl =
     !trimmed ||
+    /^codex:\/\//i.test(trimmed) ||
     /api\.openai-proxy\.org/i.test(trimmed) ||
     /your-proxy\.com/i.test(trimmed) ||
     /your-gateway\.com/i.test(trimmed);
@@ -1363,6 +1619,7 @@ async function executeUniversalAgentCall(options: {
   customHeaders?: string;
   protocol?: ApiProtocolMode;
   jsonHint?: string;
+  cliCommand?: string;
 }): Promise<{ text: string; protocolUsed: string; normalizedEndpoint: string }> {
   const {
     model,
@@ -1374,17 +1631,39 @@ async function executeUniversalAgentCall(options: {
     customHeaders,
     protocol = "auto",
     jsonHint,
+    cliCommand,
   } = options;
 
-  const endpoint = normalizeUniversalEndpoint(customBaseUrl);
+  const isCodexMode =
+    protocol === "codex-cli" || /^codex:\/\//i.test((customBaseUrl || "").trim());
+  const codexSummary = isCodexMode
+    ? await inspectLocalCodexCliConfig(cliCommand)
+    : null;
+
+  // If Codex CLI channel is active and ~/.codex has a custom baseUrl or apiKey, inherit them when channel fields are blank
+  const effectiveBaseUrl =
+    customBaseUrl && !/^codex:\/\//i.test(customBaseUrl.trim())
+      ? customBaseUrl
+      : codexSummary?.detectedBaseUrl || "";
+  const effectiveApiKey =
+    (customApiKey && customApiKey.trim()) ||
+    codexSummary?.detectedApiKey ||
+    undefined;
+
+  const endpoint = normalizeUniversalEndpoint(effectiveBaseUrl);
   const expectJson = config.responseMimeType === "application/json";
 
-  const runGeminiNative = async () => {
-    const ai = createGeminiClient(customBaseUrl, customApiKey, customHeaders);
+  const runGeminiNative = async (overrideModel?: string) => {
+    const targetModel = overrideModel || model;
+    const ai = createGeminiClient(
+      effectiveBaseUrl,
+      effectiveApiKey,
+      customHeaders
+    );
     const nativeConfig: any = { ...config };
     if (
-      (model === "gemini-4-argon" || enableHighThinking) &&
-      supportsHighThinking(model)
+      (targetModel === "gemini-4-argon" || enableHighThinking) &&
+      supportsHighThinking(targetModel)
     ) {
       nativeConfig.thinkingConfig = {
         thinkingLevel: ThinkingLevel.HIGH,
@@ -1393,30 +1672,36 @@ async function executeUniversalAgentCall(options: {
 
     try {
       const response = await ai.models.generateContent({
-        model,
+        model: targetModel,
         contents: { parts },
         config: nativeConfig,
       });
       return {
         text: response.text || "",
-        protocolUsed: "gemini-native",
-        normalizedEndpoint:
-          endpoint.cleanRoot || "https://generativelanguage.googleapis.com",
+        protocolUsed: isCodexMode
+          ? "codex-cli (内置模型桥接)"
+          : "gemini-native",
+        normalizedEndpoint: isCodexMode
+          ? `codex://local → ${targetModel}`
+          : endpoint.cleanRoot || "https://generativelanguage.googleapis.com",
       };
     } catch (err: any) {
       // If a custom Gemini model rejects thinkingConfig, retry without thinkingConfig
       if (nativeConfig.thinkingConfig) {
         delete nativeConfig.thinkingConfig;
         const retryRes = await ai.models.generateContent({
-          model,
+          model: targetModel,
           contents: { parts },
           config: nativeConfig,
         });
         return {
           text: retryRes.text || "",
-          protocolUsed: "gemini-native",
-          normalizedEndpoint:
-            endpoint.cleanRoot || "https://generativelanguage.googleapis.com",
+          protocolUsed: isCodexMode
+            ? "codex-cli (内置模型桥接)"
+            : "gemini-native",
+          normalizedEndpoint: isCodexMode
+            ? `codex://local → ${targetModel}`
+            : endpoint.cleanRoot || "https://generativelanguage.googleapis.com",
         };
       }
       throw err;
@@ -1431,19 +1716,25 @@ async function executeUniversalAgentCall(options: {
       systemInstruction: config.systemInstruction,
       expectJson,
       jsonHint,
-      customApiKey,
+      customApiKey: effectiveApiKey,
       customHeaders,
     });
     return {
       text,
-      protocolUsed: "openai-compatible",
-      normalizedEndpoint: endpoint.openAiChatUrl,
+      protocolUsed: isCodexMode
+        ? "codex-cli (网关桥接)"
+        : "openai-compatible",
+      normalizedEndpoint: isCodexMode
+        ? `codex://local → ${endpoint.openAiChatUrl}`
+        : endpoint.openAiChatUrl,
     };
   };
 
   const runGeminiWithFallback = async () => {
     try {
-      return await runGeminiNative();
+      const primaryTarget =
+        model === "codex-mini-latest" ? "gemini-4-argon" : model;
+      return await runGeminiNative(primaryTarget);
     } catch (primaryErr) {
       // Fallback to built-in reliable agent models if a custom or preview model ID is unavailable
       const fallbackModels = ["gemini-4-argon", "gemini-3.8-flash"].filter(
@@ -1452,8 +1743,8 @@ async function executeUniversalAgentCall(options: {
       for (const fbModel of fallbackModels) {
         try {
           const ai = createGeminiClient(
-            customBaseUrl,
-            customApiKey,
+            effectiveBaseUrl,
+            effectiveApiKey,
             customHeaders
           );
           const response = await ai.models.generateContent({
@@ -1463,9 +1754,12 @@ async function executeUniversalAgentCall(options: {
           });
           return {
             text: response.text || "",
-            protocolUsed: `gemini-native (fallback:${fbModel})`,
-            normalizedEndpoint:
-              endpoint.cleanRoot || "https://generativelanguage.googleapis.com",
+            protocolUsed: isCodexMode
+              ? `codex-cli (内置模型:${fbModel})`
+              : `gemini-native (fallback:${fbModel})`,
+            normalizedEndpoint: isCodexMode
+              ? `codex://local → ${fbModel}`
+              : endpoint.cleanRoot || "https://generativelanguage.googleapis.com",
           };
         } catch {
           // try next fallback
@@ -1474,6 +1768,56 @@ async function executeUniversalAgentCall(options: {
       throw primaryErr;
     }
   };
+
+  if (isCodexMode) {
+    // 1. If local `codex` binary is installed on the host machine, attempt native CLI execution first
+    if (codexSummary?.cliInstalled) {
+      try {
+        const textParts = parts
+          .filter((p) => typeof p?.text === "string" && p.text.trim())
+          .map((p) => p.text.trim());
+        const combinedPrompt = [
+          config.systemInstruction ? `[System]: ${config.systemInstruction}` : "",
+          jsonHint ? `[Format]: ${jsonHint}` : "",
+          expectJson
+            ? "[Important]: Return ONLY valid JSON without markdown explanation."
+            : "",
+          ...textParts,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+
+        const cliOut = await executeLocalCodexCliBinary({
+          prompt: combinedPrompt,
+          model,
+          parts,
+          cliCommand: codexSummary.cliCommand,
+          customBaseUrl: effectiveBaseUrl,
+          customApiKey: effectiveApiKey,
+        });
+        return {
+          text: cliOut,
+          protocolUsed: `codex-cli (${codexSummary.cliVersion || "本地CLI进程"})`,
+          normalizedEndpoint: `codex exec -m ${model}`,
+        };
+      } catch (cliErr) {
+        console.warn(
+          "Local codex CLI binary execution fell back to built-in model bridge:",
+          cliErr
+        );
+      }
+    }
+
+    // 2. Seamless bridge to `~/.codex` configured gateway or built-in Studio models
+    if (endpoint.rawUrl && !isLikelyGeminiModel(model)) {
+      try {
+        return await runOpenAiCompatible();
+      } catch {
+        return await runGeminiWithFallback();
+      }
+    }
+    return await runGeminiWithFallback();
+  }
 
   if (protocol === "gemini-native") {
     return runGeminiWithFallback();
@@ -2126,7 +2470,53 @@ function resolveCanonicalRefId(
   return null;
 }
 
-// Health & channel check endpoint (supports broad endpoint formats + multi-protocol auto fallback)
+// Inspect local Codex CLI installation, ~/.codex configuration, and built-in model bridge readiness
+app.post("/api/codex/status", async (req, res) => {
+  try {
+    const { cliCommand } = (req.body || {}) as {
+      cliCommand?: string;
+      customBaseUrl?: string;
+      customApiKey?: string;
+    };
+    const summary = await inspectLocalCodexCliConfig(cliCommand);
+    const builtInAgentModels = [
+      "gemini-4-argon",
+      "gemini-3.8-flash",
+      "codex-mini-latest",
+      "gemini-2.5-pro",
+    ];
+    const builtInImageModels = [
+      "gemini-nano-banana-2.1",
+      "gemini-3-pro-image",
+      "gemini-3.1-flash-lite-image",
+      "gpt-image-1",
+    ];
+    res.json({
+      ok: true,
+      cliInstalled: summary.cliInstalled,
+      cliCommand: summary.cliCommand,
+      cliVersion: summary.cliVersion,
+      configPath: summary.configPath,
+      configFound: summary.configFound,
+      authConfigured: summary.authConfigured,
+      detectedProvider: summary.detectedProvider,
+      detectedBaseUrl: summary.detectedBaseUrl,
+      builtInBridgeReady: summary.builtInBridgeReady,
+      builtInAgentModels,
+      builtInImageModels,
+      message: summary.cliInstalled
+        ? `已检测到本机 Codex CLI (${summary.cliVersion})，并已打通内置对话与生图模型双栈桥接`
+        : `内置 Codex CLI 协同桥接引擎已就绪（可直接调用内置对话模型与生图模型，若在本地桌面环境安装 codex 命令将自动优先调用本地 CLI）`,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      error: err?.message || "检测 Codex CLI 状态失败",
+    });
+  }
+});
+
+// Health & channel check endpoint (supports broad endpoint formats + multi-protocol auto fallback + Codex CLI)
 app.post("/api/channel/test", async (req, res) => {
   try {
     const {
@@ -2135,12 +2525,14 @@ app.post("/api/channel/test", async (req, res) => {
       customHeaders,
       protocol = "auto",
       agentModel,
+      cliCommand,
     } = req.body as {
       customBaseUrl?: string;
       customApiKey?: string;
       customHeaders?: string;
       protocol?: ApiProtocolMode;
       agentModel?: string;
+      cliCommand?: string;
     };
     const modelToTest = (agentModel || "gemini-3.8-flash").trim();
     const start = Date.now();
@@ -2152,6 +2544,7 @@ app.post("/api/channel/test", async (req, res) => {
       customApiKey,
       customHeaders,
       protocol,
+      cliCommand,
     });
 
     const latencyMs = Date.now() - start;
@@ -5067,10 +5460,12 @@ ${moduleListDesc}
     // Sanitize visualPrompt so #Prod-X, #Case-X, or literal "胶囊" never leak into image generation
     const sanitizeVisualPromptText = (rawPrompt: string): string => {
       return (rawPrompt || "")
-        .replace(/#(?:Prod|Case)(?:-\d+)?\b/gi, "我方产品")
+        .replace(/#\s*Prod\s*[-_]?\s*\d+\s*(?:（[^）]*）|\([^)]*\))?/gi, "我方自有产品主体")
+        .replace(/#\s*Case\s*[-_]?\s*\d+\s*(?:（[^）]*）|\([^)]*\))?/gi, "参考版式构图")
+        .replace(/#\s*(?:Prod|Case|P)\s*[-_]?\s*\d*/gi, "我方产品")
         .replace(/\[([^\]]+)\]/g, "$1")
-        .replace(/卖点胶囊|数据胶囊|圆角胶囊|胶囊卡片|胶囊卡|胶囊框|胶囊区|底部胶囊/g, "圆角矩形信息卡")
-        .replace(/胶囊/g, "圆角信息框")
+        .replace(/卖点胶囊|数据胶囊|圆角胶囊|胶囊卡片|胶囊卡|胶囊框|胶囊区|底部胶囊/g, "浅色圆角矩形信息卡")
+        .replace(/胶囊/g, "圆角信息卡")
         .replace(/潮玩舞台区|产品主视觉区|标题区/g, "展示区域")
         .trim();
     };
@@ -5239,7 +5634,7 @@ app.post("/api/replica/plan-tasks", async (req, res) => {
         : typeof rawConsistentStyle === "boolean"
           ? rawConsistentStyle
           : true;
-    const styleLinkageMode: "print_4d" | "color_sync" | "lock_scene" =
+    const styleLinkageMode: "print_4d" | "harmonize_color" | "color_sync" | "lock_scene" =
       rawStyleLinkageMode || (consistentStyle ? "print_4d" : "lock_scene");
     const unifiedRequirement = (rawGlobalReq || rawUnifiedReq || "").trim();
 
@@ -5294,9 +5689,9 @@ app.post("/api/replica/plan-tasks", async (req, res) => {
 3. \`themeStage\`：将原本死板的普通展台改造为契合印花故事的【泡泡玛特/盲盒级圆润磨砂微缩景观底座】（如：圆润芝士孔洞太空台、绵软云朵星光阶梯台、森系草坪洋梨露营台）；
 4. \`themeElements\`：直接从壳面印花插画中“抠”出 2~3 个标志性伴生小符号（如印花里的十字闪星✨、紫色小土星、3D软萌洋梨、小雏菊、弯月音符），以盲盒手办级圆润哑光质感在产品周围远中近景轻盈排布，严禁生硬堆砌廉价塑料感摆件；
 5. \`themeUiStyle\`：主副标题字体颜色 + 底部卖点数据胶囊框底色与描边（必须随印花主题色联动变化，如露营刺猬用深橄榄绿标题+暖琥珀黄胶囊框；美梦兔用深靛紫标题+雾霾紫蓝胶囊框，彻底杜绝千篇一律的死板黑棕框！）。`
-        : styleLinkageMode === "color_sync"
-          ? `【🔵 同色系顺应模式】：提取我方产品（#Prod）的主色调，将背景氛围色、展台色调与标题/胶囊文字颜色自动顺应调整为与我方产品高度统一的同色系，并填入 \`printThemeConfig\`。`
-          : `【⚪ 锁死原场景模式】：保持对应参考图（#Case）原有的环境色彩、展台材质与胶囊配色，仅精准替换产品主体与文案。`;
+        : styleLinkageMode === "harmonize_color" || styleLinkageMode === "color_sync"
+          ? `【🔵 同色系顺应模式】：提取我方产品（#Prod）的主色调，将背景氛围色、展台色调与标题/圆角信息卡文字颜色自动顺应调整为与我方产品高度统一的同色系，并填入 \`printThemeConfig\`。`
+          : `【⚪ 锁死原场景模式】：保持对应参考图（#Case）原有的环境色彩、展台材质与圆角信息卡配色，仅精准替换产品主体与文案。`;
 
     const taskDesc = tasks
       .map(
@@ -5430,8 +5825,19 @@ ${taskDesc}
           .filter(Boolean)
       : [];
 
+    const sanitizeReplicaText = (txt?: string): string =>
+      String(txt || "")
+        .replace(/#\s*Prod\s*[-_]?\s*\d+\s*(?:（[^）]*）|\([^)]*\))?/gi, "我方自有产品主体")
+        .replace(/#\s*Case\s*[-_]?\s*\d+\s*(?:（[^）]*）|\([^)]*\))?/gi, "参考构图")
+        .replace(/#\s*(?:Prod|Case|P)\s*[-_]?\s*\d*/gi, "我方产品")
+        .replace(/卖点胶囊|数据胶囊|圆角胶囊|胶囊卡片|胶囊卡|胶囊框|胶囊区|底部胶囊/g, "浅色圆角矩形信息卡")
+        .replace(/胶囊/g, "圆角信息卡")
+        .trim();
+
     const replicaTasks = plannedTasks.map((pt: any, idx: number) => {
-      const copyStr = String(pt.extractedCopy || "").trim();
+      const copyStr = sanitizeReplicaText(pt.extractedCopy || "")
+        .replace(/\[([^\]]+)\]/g, "$1")
+        .trim();
       const lines = copyStr
         .split("\n")
         .map((l: string) => l.trim())
@@ -5451,21 +5857,39 @@ ${taskDesc}
           )
         : [];
       const fallbackProdId = tasks[idx]?.prodRefId || productImages[0]?.id;
+      const rawPromptClean = sanitizeReplicaText(pt.visualPrompt || "");
+      const isMultiSkuCard = /全家福|多色|多花色|系列矩阵|多款/.test(
+        `${titleLine} ${rawPromptClean}`
+      );
+      const cappedBoundIds = isMultiSkuCard
+        ? aiBoundIds.slice(0, 5)
+        : aiBoundIds.slice(0, 2);
 
       return {
         id: pt.id || tasks[idx]?.id,
         title: titleLine,
         copywriting: badgeLines,
         typographyPlan: copyStr,
-        visualPrompt: pt.visualPrompt || "",
+        visualPrompt: rawPromptClean,
         extractedCopy: copyStr,
         boundProductIds:
-          aiBoundIds.length > 0
-            ? aiBoundIds
+          cappedBoundIds.length > 0
+            ? cappedBoundIds
             : fallbackProdId
               ? [fallbackProdId]
               : [],
-        printThemeConfig: pt.printThemeConfig || undefined,
+        printThemeConfig: pt.printThemeConfig
+          ? {
+              ...pt.printThemeConfig,
+              themeStage: sanitizeReplicaText(pt.printThemeConfig.themeStage),
+              themeElements: sanitizeReplicaText(
+                pt.printThemeConfig.themeElements
+              ),
+              themeUiStyle: sanitizeReplicaText(
+                pt.printThemeConfig.themeUiStyle
+              ),
+            }
+          : undefined,
       };
     });
 
@@ -5539,7 +5963,7 @@ app.post("/api/image/generate", async (req, res) => {
       replicaFidelity?: "style_reference" | "high_replica" | "style_ref";
       consistentStyle?: boolean;
       consistentOutputStyle?: boolean;
-      styleLinkageMode?: "print_4d" | "color_sync" | "lock_scene";
+      styleLinkageMode?: "print_4d" | "harmonize_color" | "color_sync" | "lock_scene";
       printThemeConfig?: {
         printStory?: string;
         themePalette?: string;
@@ -5611,13 +6035,15 @@ app.post("/api/image/generate", async (req, res) => {
     const sanitizePromptForRender = (text?: string): string => {
       if (!text) return "";
       return text
-        .replace(/#(?:Prod|Case)(?:-\d+)?\b/gi, "我方商品")
+        .replace(/#\s*Prod\s*[-_]?\s*\d+\s*(?:（[^）]*）|\([^)]*\))?/gi, "我方商品主体")
+        .replace(/#\s*Case\s*[-_]?\s*\d+\s*(?:（[^）]*）|\([^)]*\))?/gi, "参考版式")
+        .replace(/#\s*(?:Prod|Case|P)\s*[-_]?\s*\d*/gi, "我方商品")
         .replace(/\[([^\]]+)\]/g, "$1")
         .replace(
           /卖点胶囊|数据胶囊|圆角胶囊|胶囊卡片|胶囊卡|胶囊框|胶囊底栏|胶囊区|底部胶囊|贴纸胶囊/g,
-          "圆角矩形卖点卡片"
+          "浅色圆角矩形卖点卡片"
         )
-        .replace(/胶囊/g, "圆角标签框")
+        .replace(/胶囊/g, "圆角信息卡")
         .replace(/潮玩舞台区/g, "中央展台区域")
         .replace(/标题区/g, "顶部标题区域")
         .trim();
@@ -5627,8 +6053,9 @@ app.post("/api/image/generate", async (req, res) => {
       if (!text) return "";
       return text
         .replace(/\[([^\]]+)\]/g, "$1")
-        .replace(/#(?:Prod|Case)(?:-\d+)?\b/gi, "")
+        .replace(/#\s*(?:Prod|Case|P)\s*[-_]?\s*\d*/gi, "")
         .replace(/^\s*(?:主标题|副标题|底部卖点|卖点|胶囊|参数)\s*[:：]\s*/gm, "")
+        .replace(/胶囊/g, "信息栏")
         .trim();
     };
 
@@ -5651,7 +6078,7 @@ app.post("/api/image/generate", async (req, res) => {
           ? `- ③ 印花伴生悬浮小元素：${sanitizePromptForRender(cfg.themeElements)}（仅限从产品壳面插画延展出的2~3个微缩主题符号，严禁在空中画医药胶囊药丸！）`
           : "",
         cfg.themeUiStyle
-          ? `- ④ 标题与底部圆角矩形信息卡配色：${sanitizePromptForRender(cfg.themeUiStyle)}（标题字色与底部圆角矩形卖点框必须随本款主题色同步联动，严禁使用死板黑棕色底框！）`
+          ? `- ④ 标题与底部圆角矩形信息卡配色：${sanitizePromptForRender(cfg.themeUiStyle)}（标题字色与底部圆角矩形卖点框必须随本款主题色同步联动，采用浅色半透明圆角卡片，严禁使用死板黑棕色底框！）`
           : "",
       ].filter(Boolean);
       return lines.length > 0
@@ -5707,8 +6134,29 @@ app.post("/api/image/generate", async (req, res) => {
 
     if (isReplicaRender) {
       // ==================== PIPELINE A: MAIN IMAGE / SKU REPLICA STUDIO (Multi-Angle #Prod + 4D Print Theme Linkage) ====================
-      // 1. Attach All Bound Own Product Image(s) (#Prod, up to 5 angles/SKUs)
-      for (let i = 0; i < Math.min(5, prodRefs.length); i++) {
+      // If user enabled "🔒 锁图微调" (resolvedLockedResult), attach the locked current result FIRST as the #1 visual anchor, and cap #Prod to 1 primary identity image!
+      if (resolvedLockedResult) {
+        parts.push({
+          text: `【🔒 最高权重视觉基准图 · 当前已确认满意成图（局部微调锁死构图锚点）】：这是一张用户已经基本满意的当前成图！请 95% 严格锁定此图的【整体构图布局、镜头透视、产品摆放位置、展台光影与环境色彩】不变，仅针对下方指定的【局部微调修改要求】或最新文案进行定点精修重绘！`,
+        });
+        parts.push({
+          inlineData: {
+            data: resolvedLockedResult.data,
+            mimeType: resolvedLockedResult.mimeType,
+          },
+        });
+      }
+
+      const isMultiSkuReplicaCard =
+        /全家福|系列矩阵|多花色|多色同框|全系配色|多款可选|色彩矩阵/.test(
+          `${title || ""} ${prompt || ""} ${copywriting || ""}`
+        ) || prodRefs.length >= 3;
+      const maxReplicaProds = resolvedLockedResult
+        ? 1
+        : isMultiSkuReplicaCard
+          ? 6
+          : 2;
+      for (let i = 0; i < Math.min(maxReplicaProds, prodRefs.length); i++) {
         const ref = prodRefs[i];
         const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
         if (sanitized) {
@@ -5716,7 +6164,10 @@ app.post("/api/image/generate", async (req, res) => {
             ? roleLabelMap[ref.prodAngleRole] || ref.prodAngleRole
             : "产品实拍图";
           parts.push({
-            text: `【图A-${i + 1} · 我方自有商品实拍原图（视角角色：${roleDesc}）】：必须 100% 严格还原此图中的商品工业造型、轮廓比例、材质光泽与壳面卡通印花图案细节，绝对禁止商品变形或篡改图案！（注意：切勿在画面中印出任何图片编号或文件名）`,
+            text:
+              isMultiSkuReplicaCard || i === 0
+                ? `【图A-${i + 1} · 我方自有商品实拍原图（视角角色：${roleDesc}）】：必须 100% 严格还原此图中的商品工业造型、轮廓比例、材质光泽与壳面卡通印花图案细节，绝对禁止商品变形或篡改图案！（注意：切勿在画面中印出任何图片编号或文件名）`
+                : `【图A-${i + 1} · 同一款商品的互补视角结构参考（视角角色：${roleDesc}）】：此图与图A-1是【同一款商品】的不同拍摄角度（用于提供真实的开盖内舱或耳机本体结构细节），请结合图A-1的正立面印花与本图的内部/侧面结构合成 1 套商品主体，严禁把多张角度参考图画成 2 个重复的充电仓并排摆在展台上！`,
           });
           parts.push({
             inlineData: {
@@ -5733,19 +6184,7 @@ app.post("/api/image/generate", async (req, res) => {
           : "high_replica";
       const isHighReplica = normFidelity === "high_replica";
 
-      // 2. If user enabled "🔒 锁图微调" (lockedResultImageUrl), attach the locked current result as the primary composition anchor!
-      // Otherwise attach Target Reference Image (#Case).
-      if (resolvedLockedResult) {
-        parts.push({
-          text: `【🔒 当前已确认满意成图基准（局部微调锁死构图锚点）】：这是一张用户已经基本满意的当前成图！请 95% 严格保持此图的【整体构图布局、镜头透视、产品摆放位置、展台光影与环境色彩】不变，仅针对下方指定的【局部微调修改要求】或最新文案进行定点精修重绘，同时确保商品外观与【图A · 我方自有商品实拍原图】100%一致！`,
-        });
-        parts.push({
-          inlineData: {
-            data: resolvedLockedResult.data,
-            mimeType: resolvedLockedResult.mimeType,
-          },
-        });
-      } else {
+      if (!resolvedLockedResult) {
         for (const ref of rawCaseRefs.slice(0, 1)) {
           const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
           if (sanitized) {
@@ -5816,7 +6255,10 @@ app.post("/api/image/generate", async (req, res) => {
         consistencyBlock =
           print4dBlock ||
           `【🟣 印花主题4维深度联动（激活）】：请深入识别【图A · 我方自有商品实拍原图】壳面上的卡通插画/印花主题（或机身主色调），将画面的：①背景渐变色温、②潮玩盲盒感圆润磨砂底座、③从印花图案提取的2~3个悬浮伴生小符号、④主副标题字色与底部圆角矩形卖点卡片配色，全部随图A的印花主题深度联动变化，营造浑然一体的主题世界观！`;
-      } else if (effectiveLinkageMode === "color_sync") {
+      } else if (
+        effectiveLinkageMode === "harmonize_color" ||
+        effectiveLinkageMode === "color_sync"
+      ) {
         consistencyBlock =
           print4dBlock ||
           `【🔵 同色系顺应（激活）】：请自动提取【图A · 我方自有商品实拍原图】的主色调，将画面中的背景渐变色、氛围光效、周边呼应道具以及标题/底部圆角卡片颜色，同步协调为与【图A】高度和谐的同色系配色！`;
@@ -5862,39 +6304,11 @@ app.post("/api/image/generate", async (req, res) => {
         .trim();
     } else {
       // ==================== PIPELINE B: MODULAR DETAIL PAGE STUDIO (Pure Product + 6-Anchor Spec + Optional 1:1->3:4/9:16 Vertical Reframing + Optional Lock-Result Refinement) ====================
-      // 1. Attach Own Product Images (#Prod) — Sole Authority for Product Identity!
-      // IMPORTANT: Never put "#Prod-2" or "#Prod-4" into the text label sent to the image model, otherwise the image model prints "#Prod-2" onto the podium!
-      const isMultiSkuMatrixScreen = moduleType === "series_matrix";
-      const maxProdToAttach = isMultiSkuMatrixScreen ? 5 : 2;
-      const effectiveDetailProdRefs = prodRefs.slice(0, maxProdToAttach);
-
-      for (let i = 0; i < effectiveDetailProdRefs.length; i++) {
-        const ref = effectiveDetailProdRefs[i];
-        const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
-        if (sanitized) {
-          const roleDesc = ref.prodAngleRole
-            ? roleLabelMap[ref.prodAngleRole] || ref.prodAngleRole
-            : "产品实拍图";
-          parts.push({
-            text: isMultiSkuMatrixScreen
-              ? `【我方自有商品实拍原图（款式 ${i + 1} · ${roleDesc}）】：请 100% 严格还原此商品的真实工业外观、几何比例与壳面卡通印花细节！（严禁在画面中印出任何编号文字）`
-              : `【我方自有商品实拍原图（同款产品的第 ${i + 1} 视角参考：${roleDesc}）】：这与本屏其他参考图是【同一款商品】的不同拍摄角度（如充电仓与耳机本体），请结合这些角度 100% 严格还原商品的工业外形、比例与表面卡通印花图案，在展台上仅展示 1 套商品主体（如 1 个充电仓 + 1 对耳机），绝对禁止把多张角度参考图画成多个重复的充电仓并排摆在展台上，更严禁在画面上印出任何图片编号或说明标签！`,
-          });
-          parts.push({
-            inlineData: {
-              data: sanitized.data,
-              mimeType: sanitized.mimeType,
-            },
-          });
-        }
-      }
-
-      // 2. If user enabled "🔒 锁图微调" (`resolvedLockedResult`), attach the current screen result as the primary composition lock anchor!
-      // Otherwise, if this detail screen is extended from an already-generated 1:1 Main Image (`sourceReplicaImageUrl`), attach the 1:1 image.
+      // If user enabled "🔒 锁图微调" (`resolvedLockedResult`), attach the current screen result FIRST as the #1 visual composition lock anchor!
       let hasVerticalReframeSource = false;
       if (resolvedLockedResult) {
         parts.push({
-          text: `【🔒 当前分屏已确认满意成图基准（局部微调锁死构图锚点）】：这是一张用户对整体构图已经满意的当前分屏成图。请 95% 严格锁定此图的【整体构图布局、产品位置角度、展台道具、光影色调与版面结构】不变，仅按下方【🔒 本屏锁图局部微调指令】或最新文案进行定点精修，同时确保商品外观与上方我方商品实拍图 100% 一致！`,
+          text: `【🔒 最高权重视觉基准图 · 当前分屏已确认满意成图（局部微调锁死构图锚点）】：这是一张用户对整体构图已经满意的当前分屏成图。请 95% 严格锁定此图的【整体构图布局、产品位置角度、展台道具、光影色调与版面结构】不变，仅按下方【🔒 本屏锁图局部微调指令】或最新文案进行定点精修！`,
         });
         parts.push({
           inlineData: {
@@ -5902,7 +6316,10 @@ app.post("/api/image/generate", async (req, res) => {
             mimeType: resolvedLockedResult.mimeType,
           },
         });
-      } else if (sourceReplicaImageUrl && sourceReplicaImageUrl.trim()) {
+      }
+
+      // 1. If not in locked-result mode and this detail screen is extended from an already-generated 1:1 Main Image (`sourceReplicaImageUrl`), attach the 1:1 image FIRST as the visual worldview anchor (matching Pre-Flight Inspector Slot #1).
+      if (!resolvedLockedResult && sourceReplicaImageUrl && sourceReplicaImageUrl.trim()) {
         const cleanSourceUrl = sourceReplicaImageUrl.trim();
         const resolvedSource = await resolveReferenceInlineImage(
           {
@@ -5923,6 +6340,37 @@ app.post("/api/image/generate", async (req, res) => {
             inlineData: {
               data: resolvedSource.data,
               mimeType: resolvedSource.mimeType,
+            },
+          });
+        }
+      }
+
+      // 2. Attach Own Product Images (#Prod) — Sole Authority for Product Identity!
+      // IMPORTANT: Never put "#Prod-2" or "#Prod-4" into the text label sent to the image model, otherwise the image model prints "#Prod-2" onto the podium!
+      const isMultiSkuMatrixScreen = moduleType === "series_matrix";
+      const maxProdToAttach = resolvedLockedResult
+        ? 1
+        : isMultiSkuMatrixScreen
+          ? 6
+          : 2;
+      const effectiveDetailProdRefs = prodRefs.slice(0, maxProdToAttach);
+
+      for (let i = 0; i < effectiveDetailProdRefs.length; i++) {
+        const ref = effectiveDetailProdRefs[i];
+        const sanitized = await resolveReferenceInlineImage(ref, ossConfig);
+        if (sanitized) {
+          const roleDesc = ref.prodAngleRole
+            ? roleLabelMap[ref.prodAngleRole] || ref.prodAngleRole
+            : "产品实拍图";
+          parts.push({
+            text: isMultiSkuMatrixScreen
+              ? `【我方自有商品实拍原图（款式 ${i + 1} · ${roleDesc}）】：请 100% 严格还原此商品的真实工业外观、几何比例与壳面卡通印花细节！（严禁在画面中印出任何编号文字）`
+              : `【我方自有商品实拍原图（同款产品的第 ${i + 1} 视角参考：${roleDesc}）】：这与本屏其他参考图是【同一款商品】的不同拍摄角度（如充电仓与耳机本体），请结合这些角度 100% 严格还原商品的工业外形、比例与表面卡通印花图案，在展台上仅展示 1 套商品主体（如 1 个充电仓 + 1 对耳机），绝对禁止把多张角度参考图画成多个重复的充电仓并排摆在展台上，更严禁在画面上印出任何图片编号或说明标签！`,
+          });
+          parts.push({
+            inlineData: {
+              data: sanitized.data,
+              mimeType: sanitized.mimeType,
             },
           });
         }
@@ -6312,7 +6760,52 @@ app.post("/api/image/generate", async (req, res) => {
       modelUsed: string;
     };
 
-    if (protocol === "gemini-native") {
+    if (
+      protocol === "codex-cli" ||
+      /^codex:\/\//i.test((customBaseUrl || "").trim())
+    ) {
+      const codexInfo = await inspectLocalCodexCliConfig();
+      const codexBaseUrl =
+        customBaseUrl && !/^codex:\/\//i.test(customBaseUrl.trim())
+          ? customBaseUrl.trim()
+          : codexInfo.detectedBaseUrl || "";
+      const codexKey =
+        (customApiKey && customApiKey.trim()) ||
+        codexInfo.detectedApiKey ||
+        undefined;
+
+      if (codexBaseUrl && !isLikelyGeminiModel(imageModel)) {
+        try {
+          const codexEndpoint = normalizeUniversalEndpoint(codexBaseUrl);
+          const openAiRes = await callOpenAiCompatibleImage({
+            endpoint: codexEndpoint,
+            imageModel,
+            finalPrompt,
+            parts,
+            aspectRatio: effectiveRatio,
+            customApiKey: codexKey,
+            customHeaders,
+          });
+          result = {
+            ...openAiRes,
+            protocolUsed: "codex-cli (网关生图)",
+            modelUsed: imageModel,
+          };
+        } catch {
+          const nativeRes = await runGeminiNativeImage();
+          result = {
+            ...nativeRes,
+            protocolUsed: "codex-cli (内置生图模型)",
+          };
+        }
+      } else {
+        const nativeRes = await runGeminiNativeImage();
+        result = {
+          ...nativeRes,
+          protocolUsed: "codex-cli (内置生图模型)",
+        };
+      }
+    } else if (protocol === "gemini-native") {
       result = await runGeminiNativeImage();
     } else if (protocol === "openai-compatible") {
       try {

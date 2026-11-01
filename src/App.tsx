@@ -75,6 +75,7 @@ import {
   OversizedImageCandidate,
   SkuBatchConfig,
   SkuDefaultFallbackConfig,
+  QualityGuardGlobalConfig,
   SkuDifferenceMode,
   SkuTitleIndexMode,
   SkuSellingPointPreset,
@@ -90,6 +91,9 @@ import {
   DETAIL_MODULE_PRESETS,
   ReplicaMatchMode,
   ReplicaCategory,
+  ReplicaFidelity,
+  StyleLinkageMode,
+  ReplicaLanguage,
 } from './types';
 import { PRESET_TEMPLATES } from './presets';
 import {
@@ -99,6 +103,16 @@ import {
   stitchLongDetailPageImage,
   triggerReliableImageDownload,
 } from './utils/exportHelpers';
+import {
+  QuickAssetSelectMode,
+  applyQuickAssetSelectionMode,
+  filterEnabledProds,
+  inferProdAngleRoleFromAsset,
+  limitAndOrderTaskProdsForRender,
+  sanitizeVisualPromptForRender,
+  sanitizeCopywritingForRender,
+  smartPickComplementaryProds,
+} from './utils/qualityGuardEngine';
 import {
   studioBridge,
   DEFAULT_AGENT_MODEL_PRESETS,
@@ -204,6 +218,16 @@ const INITIAL_CONFIG: StudioConfig = {
       concurrency: 3,
       timeoutSec: 120,
     },
+    {
+      id: 'local-codex-cli',
+      name: '本地 Codex CLI 通道 (支持内置模型对话与生图)',
+      mode: 'codex_cli',
+      baseUrl: 'codex://local',
+      cliCommand: 'codex',
+      protocol: 'codex-cli',
+      concurrency: 2,
+      timeoutSec: 120,
+    },
   ],
   agentModel: 'gemini-4-argon',
   enableHighThinking: true,
@@ -251,6 +275,17 @@ const INITIAL_CONFIG: StudioConfig = {
     defaultAspectRatio: '1:1',
     defaultImageSize: '1K',
     textMode: 'with_text',
+    replicaFidelity: 'style_reference',
+    styleLinkageMode: 'print_4d',
+    replicaLanguage: 'zh',
+  },
+  qualityGuardConfig: {
+    autoSanitizePromptCodes: true,
+    strictSingleSkuProdCap: true,
+    enforceLightRoundedCards: true,
+    lockRefineHighWeightAnchor: true,
+    customNegativePrompt:
+      '严禁出现有线耳机线、严禁改变充电仓指示灯孔位与合页结构、严禁同一展台并排出现两个重复充电仓、严禁绘制3D医药胶囊颗粒与深棕黑底框、严禁乱码错别字与半截文字',
   },
   confirmBeforeReset: true,
   preserveCopyOnReset: false,
@@ -289,6 +324,9 @@ export const DEFAULT_SKU_SELLING_POINT_PRESETS: SkuSellingPointPreset[] =
 
 export const DEFAULT_SKU_FALLBACK_CONFIG: SkuDefaultFallbackConfig =
   INITIAL_CONFIG.skuDefaultFallback!;
+
+export const DEFAULT_QUALITY_GUARD_CONFIG: QualityGuardGlobalConfig =
+  INITIAL_CONFIG.qualityGuardConfig!;
 
 const LEGACY_CONFLICTING_LAYOUT_RULES = new Set([
   '电商标准高质感极简展台背景，严锁全套相同相机焦段、相同产品45°黄金摆放视角与相同尺寸占比；顶部或右上角统一摆放款式花色名称与色卡胶囊，底部预留12%防遮挡安全区。',
@@ -638,6 +676,20 @@ export default function App() {
     ok?: boolean;
     previewUrl?: string;
   }>({ loading: false });
+  const [codexCliStatus, setCodexCliStatus] = useState<{
+    loading: boolean;
+    checked?: boolean;
+    cliInstalled?: boolean;
+    cliVersion?: string;
+    configPath?: string;
+    configBaseUrl?: string;
+    configModel?: string;
+    hasAuthKey?: boolean;
+    hasBuiltInKey?: boolean;
+    builtInAgentModels?: string[];
+    builtInImageModels?: string[];
+    message?: string;
+  }>({ loading: false });
 
   const [lightboxImage, setLightboxImage] = useState<{
     url: string;
@@ -940,6 +992,12 @@ export default function App() {
             ...(savedGlobalDefaults.skuDefaultFallback || {}),
           };
 
+          const resolvedQualityGuard: QualityGuardGlobalConfig = {
+            ...DEFAULT_QUALITY_GUARD_CONFIG,
+            ...(cfgFromSnapshot.qualityGuardConfig || {}),
+            ...(savedGlobalDefaults.qualityGuardConfig || {}),
+          };
+
           if (parsed.config && typeof parsed.config === 'object') {
             const cfg = parsed.config as Partial<StudioConfig>;
             const sanitizedImageModel =
@@ -947,7 +1005,7 @@ export default function App() {
               cfg.imageModel.includes('2.5-flash-image')
                 ? 'gemini-nano-banana-2.1'
                 : cfg.imageModel;
-            const sanitizedChannels = Array.isArray(cfg.channels)
+            const rawSanitizedChannels = Array.isArray(cfg.channels)
               ? cfg.channels.map((ch) =>
                   /api\.openai-proxy\.org/i.test(ch.baseUrl || '')
                     ? {
@@ -958,6 +1016,20 @@ export default function App() {
                     : ch
                 )
               : undefined;
+            const builtInCodexChannel = INITIAL_CONFIG.channels.find(
+              (c) => c.id === 'local-codex-cli'
+            );
+            const sanitizedChannels =
+              rawSanitizedChannels && builtInCodexChannel
+                ? rawSanitizedChannels.some(
+                    (c) =>
+                      c.id === 'local-codex-cli' ||
+                      c.mode === 'codex_cli' ||
+                      c.protocol === 'codex-cli'
+                  )
+                  ? rawSanitizedChannels
+                  : [...rawSanitizedChannels, builtInCodexChannel]
+                : rawSanitizedChannels;
 
             setConfig((prev) => ({
               ...prev,
@@ -967,7 +1039,16 @@ export default function App() {
               agentModelPresets:
                 Array.isArray(cfg.agentModelPresets) &&
                 cfg.agentModelPresets.length > 0
-                  ? cfg.agentModelPresets
+                  ? cfg.agentModelPresets.some(
+                      (m) => m.id === 'codex-mini-latest'
+                    )
+                    ? cfg.agentModelPresets
+                    : [
+                        ...cfg.agentModelPresets,
+                        ...DEFAULT_AGENT_MODEL_PRESETS.filter(
+                          (m) => m.id === 'codex-mini-latest'
+                        ),
+                      ]
                   : prev.agentModelPresets,
               imageModelPresets:
                 Array.isArray(cfg.imageModelPresets) &&
@@ -978,6 +1059,7 @@ export default function App() {
                   : prev.imageModelPresets,
               defaultSellingPointPresets: resolvedSpPresets,
               skuDefaultFallback: resolvedSkuFallback,
+              qualityGuardConfig: resolvedQualityGuard,
               confirmBeforeReset:
                 typeof savedGlobalDefaults.confirmBeforeReset === 'boolean'
                   ? savedGlobalDefaults.confirmBeforeReset
@@ -1006,6 +1088,7 @@ export default function App() {
               ...prev,
               defaultSellingPointPresets: resolvedSpPresets,
               skuDefaultFallback: resolvedSkuFallback,
+              qualityGuardConfig: resolvedQualityGuard,
             }));
           }
           setCardLayout('storyboard');
@@ -1223,16 +1306,40 @@ export default function App() {
                   ...DEFAULT_SKU_FALLBACK_CONFIG,
                   ...(savedGlobalDefaults.skuDefaultFallback || {}),
                 };
-                setConfig((prev) => ({
-                  ...prev,
-                  ...savedGlobalDefaults,
-                  defaultSellingPointPresets: sp,
-                  skuDefaultFallback: fb,
-                  ossConfig: mergeOssConfigPreservingCredentials(
-                    prev.ossConfig,
-                    savedGlobalDefaults.ossConfig
-                  ),
-                }));
+                const qg: QualityGuardGlobalConfig = {
+                  ...DEFAULT_QUALITY_GUARD_CONFIG,
+                  ...(savedGlobalDefaults.qualityGuardConfig || {}),
+                };
+                setConfig((prev) => {
+                  const baseChannels = Array.isArray(savedGlobalDefaults.channels)
+                    ? savedGlobalDefaults.channels
+                    : prev.channels;
+                  const builtInCodex = INITIAL_CONFIG.channels.find(
+                    (c) => c.id === 'local-codex-cli'
+                  );
+                  const mergedChannels =
+                    builtInCodex &&
+                    !baseChannels.some(
+                      (c) =>
+                        c.id === 'local-codex-cli' ||
+                        c.mode === 'codex_cli' ||
+                        c.protocol === 'codex-cli'
+                    )
+                      ? [...baseChannels, builtInCodex]
+                      : baseChannels;
+                  return {
+                    ...prev,
+                    ...savedGlobalDefaults,
+                    channels: mergedChannels,
+                    defaultSellingPointPresets: sp,
+                    skuDefaultFallback: fb,
+                    qualityGuardConfig: qg,
+                    ossConfig: mergeOssConfigPreservingCredentials(
+                      prev.ossConfig,
+                      savedGlobalDefaults.ossConfig
+                    ),
+                  };
+                });
                 setSkuBatchConfig((prev) => ({
                   ...prev,
                   skuDiffMode: fb.skuDiffMode,
@@ -1243,6 +1350,9 @@ export default function App() {
                   defaultAspectRatio: fb.defaultAspectRatio,
                   defaultImageSize: fb.defaultImageSize,
                   textMode: fb.textMode,
+                  replicaFidelity: fb.replicaFidelity || 'style_reference',
+                  styleLinkageMode: fb.styleLinkageMode || 'print_4d',
+                  replicaLanguage: fb.replicaLanguage || 'zh',
                   sellingPointPresets: sp,
                 }));
               }
@@ -1279,6 +1389,7 @@ export default function App() {
             imageModelPresets: config.imageModelPresets,
             defaultSellingPointPresets: config.defaultSellingPointPresets,
             skuDefaultFallback: config.skuDefaultFallback,
+            qualityGuardConfig: config.qualityGuardConfig,
             confirmBeforeReset: config.confirmBeforeReset,
             preserveCopyOnReset: config.preserveCopyOnReset,
             defaultAspectRatio: config.defaultAspectRatio,
@@ -1544,6 +1655,29 @@ export default function App() {
     config.channels.find((c) => c.id === config.activeChannelId) ||
     config.channels[0];
 
+  const getActiveChannelBridgeParams = () => ({
+    customBaseUrl:
+      activeChannel.mode === 'custom_gateway'
+        ? activeChannel.baseUrl
+        : activeChannel.mode === 'codex_cli'
+          ? activeChannel.baseUrl || 'codex://local'
+          : '',
+    customApiKey:
+      activeChannel.mode === 'custom_gateway' ||
+      activeChannel.mode === 'codex_cli'
+        ? activeChannel.apiKey
+        : undefined,
+    customHeaders:
+      activeChannel.mode === 'custom_gateway' ||
+      activeChannel.mode === 'codex_cli'
+        ? activeChannel.customHeaders
+        : undefined,
+    protocol:
+      activeChannel.mode === 'codex_cli'
+        ? ('codex-cli' as ApiProtocolMode)
+        : activeChannel.protocol || 'auto',
+  });
+
   // Global clipboard paste (Ctrl+V) adds to the active studio's asset pool without re-binding on every render
   const pasteHandlerRef = useRef<(e: ClipboardEvent) => void>(() => {});
   pasteHandlerRef.current = (e: ClipboardEvent) => {
@@ -1612,7 +1746,14 @@ export default function App() {
       unifiedLayoutRule: preserveCopy ? prev.unifiedLayoutRule : '',
       defaultAspectRatio: fb.defaultAspectRatio,
       defaultImageSize: fb.defaultImageSize,
-      textMode: fb.textMode,
+      textMode:
+        fb.replicaLanguage === 'none'
+          ? 'without_text'
+          : fb.textMode || 'with_text',
+      replicaFidelity: fb.replicaFidelity || 'style_reference',
+      styleLinkageMode: fb.styleLinkageMode || 'print_4d',
+      consistentOutputStyle: (fb.styleLinkageMode || 'print_4d') !== 'lock_scene',
+      replicaLanguage: fb.replicaLanguage || 'zh',
       sellingPointPresets: protectedPresets,
     }));
     setSkuTasks([]);
@@ -1987,34 +2128,75 @@ export default function App() {
     }
   };
 
+  // Probe local Codex CLI & built-in model bridge status
+  const handleProbeCodexCliStatus = async (silent = false) => {
+    setCodexCliStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await studioBridge.getCodexCliStatus({
+        cliCommand: activeChannel.cliCommand,
+        customBaseUrl: activeChannel.baseUrl,
+        customApiKey: activeChannel.apiKey,
+      });
+      setCodexCliStatus({
+        loading: false,
+        checked: true,
+        cliInstalled: res.cliInstalled,
+        cliVersion: res.cliVersion,
+        configPath: res.configPath || undefined,
+        configBaseUrl: res.detectedBaseUrl,
+        hasAuthKey: res.authConfigured,
+        hasBuiltInKey: res.builtInBridgeReady,
+        builtInAgentModels: res.builtInAgentModels,
+        builtInImageModels: res.builtInImageModels,
+        message: res.message,
+      });
+      if (!silent) {
+        showToast(res.message || '本地 Codex CLI 通道环境检测完成', 'success');
+      }
+    } catch (err: any) {
+      setCodexCliStatus({
+        loading: false,
+        checked: true,
+        message: err?.message || '检测本地 Codex CLI 状态失败',
+      });
+      if (!silent) {
+        showToast(err?.message || '检测本地 Codex CLI 状态失败', 'error');
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (
+      showApiModal &&
+      apiConfigTab === 'channel_model' &&
+      !codexCliStatus.checked &&
+      !codexCliStatus.loading
+    ) {
+      void handleProbeCodexCliStatus(true);
+    }
+  }, [showApiModal, apiConfigTab]);
+
   // Test API channel connectivity via studioBridge (Web / Electron IPC / Tauri Core)
   const handleTestChannel = async () => {
     setChannelTestStatus({ loading: true });
     try {
       const data = await studioBridge.testChannel({
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
+        cliCommand: activeChannel.cliCommand,
+        cliExtraArgs: activeChannel.cliExtraArgs,
         agentModel: config.agentModel,
       });
       if (!data.ok) {
         throw new Error(data.error || '连通性测试未通过');
       }
       const protoTag = data.protocolUsed ? ` [${data.protocolUsed}]` : '';
+      const endpointSuffix = data.normalizedEndpoint
+        ? ` · ${data.normalizedEndpoint}`
+        : '';
       setChannelTestStatus({
         loading: false,
         ok: true,
-        message: `连接正常${protoTag} · 模型 ${data.model} · 耗时 ${data.latencyMs}ms`,
+        message: `连接正常${protoTag} · 模型 ${data.model} · 耗时 ${data.latencyMs}ms${endpointSuffix}`,
       });
       showToast(
         `通道「${activeChannel.name}」连接正常 (${data.latencyMs}ms${protoTag})`,
@@ -2041,19 +2223,7 @@ export default function App() {
         imageModel: config.imageModel,
         aspectRatio: '1:1',
         imageSize: '1K',
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
       });
 
       if (!data.imageUrl) {
@@ -3293,19 +3463,7 @@ export default function App() {
       const data = await studioBridge.analyzeRefs({
         referenceImages: referenceImages.map((r) => toLightweightRefPayload(r)),
         agentModel: config.agentModel,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -3413,19 +3571,7 @@ export default function App() {
         caseImages: detailCases.map((c) => toLightweightRefPayload(c)),
         expectedTotalScreens: config.requirements.detailScreenCount,
         agentModel: config.agentModel,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -4131,19 +4277,7 @@ export default function App() {
         defaultImageSize: config.defaultImageSize,
         globalStylePrefix: config.globalStylePrefix,
         requirements: config.requirements,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -4361,19 +4495,7 @@ export default function App() {
         boundRefSummary,
         globalStylePrefix: config.globalStylePrefix,
         agentModel: config.agentModel,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
       });
 
       if (data.polishedPrompt) {
@@ -4438,20 +4560,43 @@ export default function App() {
     updateTask(task.id, { status: 'generating', errorMessage: undefined });
 
     const allDetailProds = referenceImages.filter((r) => r.category !== 'case');
+    const enabledDetailProds = filterEnabledProds(allDetailProds);
+    const activeDetailProdPool =
+      enabledDetailProds.length > 0 ? enabledDetailProds : allDetailProds;
     const allDetailCases = referenceImages.filter((r) => r.category === 'case');
 
-    // Bound #Prod items (always included as sole authority for product identity & appearance)
+    // Bound #Prod items (always included as sole authority for product identity & appearance, capped by qualityGuardEngine)
     const boundProdItems = referenceImages.filter(
       (r) => task.referenceImageIds.includes(r.id) && r.category !== 'case'
     );
-    const effectiveProdItems =
+    const rawEffectiveProdItems =
       boundProdItems.length > 0
         ? boundProdItems
-        : selectBestProdRefsForScreen(
-            task.screenNumber || 1,
-            `${task.title} ${task.visualPrompt}`,
-            allDetailProds
+        : smartPickComplementaryProds(
+            activeDetailProdPool,
+            task.moduleType || `${task.title} ${task.visualPrompt}`,
+            task.moduleType === 'series_matrix' ? 4 : 2
           );
+    const qg: QualityGuardGlobalConfig = {
+      ...DEFAULT_QUALITY_GUARD_CONFIG,
+      ...(config.qualityGuardConfig || {}),
+    };
+
+    const effectiveProdItems =
+      qg.strictSingleSkuProdCap !== false
+        ? limitAndOrderTaskProdsForRender(
+            rawEffectiveProdItems.map((p) => p.id),
+            allDetailProds,
+            {
+              isLockedRefine: Boolean(
+                qg.lockRefineHighWeightAnchor !== false &&
+                  task.lockResultAsRef &&
+                  task.resultImageUrl
+              ),
+              moduleOrTitleHint: `${task.moduleType || ''} ${task.title} ${task.visualPrompt}`,
+            }
+          )
+        : rawEffectiveProdItems.slice(0, 6);
 
     // Bound #Case items (used for dimension analysis directive & lock-base swap if explicitly requested)
     const boundCaseItems = referenceImages.filter(
@@ -4480,11 +4625,15 @@ export default function App() {
     const globalDeliveryMode: DetailCaseDeliveryMode =
       config.requirements.caseDeliveryMode || 'none';
     const effectiveDeliveryMode: DetailCaseDeliveryMode =
-      task.caseDeliveryOverride && task.caseDeliveryOverride !== 'inherit'
-        ? task.caseDeliveryOverride
-        : boundCaseItems.some((c) => isExplicitLockBaseSwapCase(c))
-          ? 'lock_base_swap'
-          : globalDeliveryMode;
+      qg.lockRefineHighWeightAnchor !== false &&
+      task.lockResultAsRef &&
+      task.resultImageUrl
+        ? 'none'
+        : task.caseDeliveryOverride && task.caseDeliveryOverride !== 'inherit'
+          ? task.caseDeliveryOverride
+          : boundCaseItems.some((c) => isExplicitLockBaseSwapCase(c))
+            ? 'lock_base_swap'
+            : globalDeliveryMode;
 
     // Assemble referenceImages to pass to the image generation model
     const prodPayloads = effectiveProdItems.map((r) =>
@@ -4556,12 +4705,26 @@ export default function App() {
       summary: `比例 ${task.aspectRatio} · ${task.imageSize} · 传图策略:${deliveryModeLabel} · 传入素材 ${refsToSend.length} 张 (#Prod:${prodPayloads.length}, #Case:${casePayloads.length})`,
     });
 
-    const effectivePrompt = (
+    const rawEffectivePrompt = (
       task.visualPrompt ||
       task.copywriting ||
       task.title ||
       '高质感商业电商产品摄影，主体突出，光影自然柔和，8K超清细节'
     ).trim();
+    const effectivePrompt =
+      qg.autoSanitizePromptCodes !== false
+        ? sanitizeVisualPromptForRender(rawEffectivePrompt, allDetailProds)
+        : rawEffectivePrompt;
+    const sanitizedCopywriting =
+      qg.autoSanitizePromptCodes !== false
+        ? sanitizeCopywritingForRender(task.copywriting || '')
+        : task.copywriting || '';
+    const sanitizedTypographyPlan =
+      qg.autoSanitizePromptCodes !== false
+        ? sanitizeCopywritingForRender(
+            task.typographyPlan || task.copywriting || ''
+          )
+        : task.typographyPlan || task.copywriting || '';
 
     const dynamicBenchmarkCase =
       analysisCases.length > 0
@@ -4573,7 +4736,7 @@ export default function App() {
           })
         : task.benchmarkCase;
 
-    const promptWithStylePrefix =
+    const basePromptWithPrefix =
       config.globalStylePrefix &&
       !effectivePrompt.includes(config.globalStylePrefix.trim()) &&
       !(
@@ -4583,11 +4746,27 @@ export default function App() {
         ? `${config.globalStylePrefix}\n${effectivePrompt}`
         : effectivePrompt;
 
+    const globalGuardDirectives: string[] = [];
+    if (qg.enforceLightRoundedCards !== false) {
+      globalGuardDirectives.push(
+        '【全局UI信息卡护栏】：画面内卖点标签统一使用浅色半透明毛玻璃圆角矩形信息卡，严禁生硬黑框/深棕底框，严禁绘制3D医药胶囊颗粒。'
+      );
+    }
+    if (qg.customNegativePrompt?.trim()) {
+      globalGuardDirectives.push(
+        `【全局负向禁用词（严禁出现）】：${qg.customNegativePrompt.trim()}`
+      );
+    }
+    const promptWithStylePrefix =
+      globalGuardDirectives.length > 0
+        ? `${basePromptWithPrefix}\n${globalGuardDirectives.join('\n')}`
+        : basePromptWithPrefix;
+
     try {
       const data = await studioBridge.generateImage({
         prompt: promptWithStylePrefix,
-        copywriting: task.copywriting,
-        typographyPlan: task.typographyPlan,
+        copywriting: sanitizedCopywriting,
+        typographyPlan: sanitizedTypographyPlan,
         benchmarkCase: dynamicBenchmarkCase,
         unifiedVisualSpec: effectiveUnifiedSpec,
         caseDeliveryMode: effectiveDeliveryMode,
@@ -4613,19 +4792,7 @@ export default function App() {
         imageModel: config.imageModel,
         aspectRatio: task.aspectRatio || config.requirements.detailAspectRatio,
         imageSize: task.imageSize || config.defaultImageSize,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -4898,19 +5065,7 @@ export default function App() {
           visualPrompt: t.visualPrompt,
         })),
         agentModel: config.agentModel,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -5470,7 +5625,8 @@ export default function App() {
 
   // Quick-sync 1 SKU task per selected #Prod image (preserves existing cards & pre-fills skuTitle from formula or tag/name)
   const handleQuickCreateTasksFromSelectedProds = () => {
-    const prodImgs = skuReferenceImages.filter((r) => r.category === 'product');
+    const rawProdImgs = skuReferenceImages.filter((r) => r.category === 'product');
+    const prodImgs = filterEnabledProds(rawProdImgs, true);
     const chosenProds = prodImgs.filter((p) =>
       skuBatchConfig.selectedProdIds.includes(p.id)
     );
@@ -5625,19 +5781,7 @@ export default function App() {
         globalStylePrefix: config.globalStylePrefix,
         agentModel: config.agentModel,
         enableHighThinking: config.enableHighThinking,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -5704,7 +5848,8 @@ export default function App() {
 
   // AI Vision Batch Orchestration for SKU Studio (Non-destructive: merges with existing card copywriting & history)
   const handleAgentGenerateSkuPlan = async () => {
-    const prodImgs = skuReferenceImages.filter((r) => r.category === 'product');
+    const rawProdImgs = skuReferenceImages.filter((r) => r.category === 'product');
+    const prodImgs = filterEnabledProds(rawProdImgs, true);
     const chosenProds = prodImgs.filter((p) =>
       skuBatchConfig.selectedProdIds.includes(p.id)
     );
@@ -5815,19 +5960,7 @@ export default function App() {
         globalStylePrefix: config.globalStylePrefix,
         agentModel: config.agentModel,
         enableHighThinking: config.enableHighThinking,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -6031,19 +6164,7 @@ export default function App() {
         boundRefSummary: refSummary,
         globalStylePrefix: config.globalStylePrefix,
         agentModel: config.agentModel,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
       });
 
       if (data.polishedPrompt) {
@@ -6107,24 +6228,47 @@ export default function App() {
       const matchedProds = allSkuProds.filter((r) =>
         activeTask.productRefIds.includes(r.id)
       );
-      const effectiveProds =
+      const rawEffectiveProds =
         matchedProds.length > 0
-          ? matchedProds.slice(0, 5)
-          : allSkuProds.slice(0, 1);
+          ? matchedProds
+          : filterEnabledProds(allSkuProds).slice(0, 1).length > 0
+            ? filterEnabledProds(allSkuProds).slice(0, 1)
+            : allSkuProds.slice(0, 1);
       const primaryCase =
         allSkuCases.find((r) => activeTask.caseRefIds.includes(r.id)) ||
         allSkuCases[
           Math.max(0, (activeTask.skuIndex || 1) - 1) %
             Math.max(1, allSkuCases.length)
         ];
+      const qg: QualityGuardGlobalConfig = {
+        ...DEFAULT_QUALITY_GUARD_CONFIG,
+        ...(config.qualityGuardConfig || {}),
+      };
+      const isLockedRefineMode = Boolean(
+        qg.lockRefineHighWeightAnchor !== false &&
+          activeTask.lockResultAsRef &&
+          activeTask.resultImageUrl
+      );
 
-      // Support 1-to-5 multi-angle #Prod images + 1 #Case reference image
+      const effectiveProds =
+        qg.strictSingleSkuProdCap !== false
+          ? limitAndOrderTaskProdsForRender(
+              rawEffectiveProds.map((p) => p.id),
+              allSkuProds,
+              {
+                isLockedRefine: isLockedRefineMode,
+                moduleOrTitleHint: `${activeTask.skuTitle || ''} ${activeTask.sellingPointBadge || ''} ${primaryCase?.tag || ''} ${primaryCase?.caseCustomRule || ''} ${activeTask.visualPrompt || ''}`,
+              }
+            )
+          : rawEffectiveProds.slice(0, 5);
+
+      // Support strictly capped multi-angle #Prod images + 1 #Case reference image (omit #Case if locked refine high-weight anchor is active)
       const boundRefs = [
         ...effectiveProds.map((p) => ({
           ...toLightweightRefPayload(p),
           isCommonAsset: false,
         })),
-        ...(primaryCase
+        ...(primaryCase && !isLockedRefineMode
           ? [{ ...toLightweightRefPayload(primaryCase), isCommonAsset: false }]
           : []),
       ];
@@ -6134,7 +6278,7 @@ export default function App() {
         (activeTask.singleRequirement || (activeTask as any).perRefRequirement)?.trim() ||
         '';
 
-      const copywritingForRender = Array.from(
+      const rawCopyJoined = Array.from(
         new Set(
           [
             activeTask.skuTitle?.trim(),
@@ -6143,14 +6287,38 @@ export default function App() {
           ].filter(Boolean)
         )
       ).join('\n');
+      const copywritingForRender =
+        qg.autoSanitizePromptCodes !== false
+          ? sanitizeCopywritingForRender(rawCopyJoined)
+          : rawCopyJoined;
 
-      const effectivePrompt = (
+      const rawEffectivePrompt = (
         activeTask.visualPrompt ||
         skuBatchConfig.referenceInfoText ||
         (isStyleRef
           ? '借鉴参考图的色彩调性、光影质感与版式风格，围绕产品原图构建高转化商业电商场景。'
           : '1:1高度复刻参考图的相机视角、构图布局、人物姿态与文字版式，将商品主体100%替换为产品原图并自动和谐全图色调。')
       ).trim();
+      const sanitizedPromptBase =
+        qg.autoSanitizePromptCodes !== false
+          ? sanitizeVisualPromptForRender(rawEffectivePrompt, allSkuProds)
+          : rawEffectivePrompt;
+
+      const skuGuardDirectives: string[] = [];
+      if (qg.enforceLightRoundedCards !== false) {
+        skuGuardDirectives.push(
+          '【全局UI信息卡护栏】：画面内卖点标签统一采用浅色半透明圆角信息卡，严禁生硬黑框/深棕底框，严禁绘制3D医药胶囊颗粒。'
+        );
+      }
+      if (qg.customNegativePrompt?.trim()) {
+        skuGuardDirectives.push(
+          `【全局负向禁用词（严禁出现）】：${qg.customNegativePrompt.trim()}`
+        );
+      }
+      const effectivePrompt =
+        skuGuardDirectives.length > 0
+          ? `${sanitizedPromptBase}\n${skuGuardDirectives.join('\n')}`
+          : sanitizedPromptBase;
 
       const rawCat =
         activeTask.replicaCategory ||
@@ -6166,8 +6334,16 @@ export default function App() {
 
       const data = await studioBridge.generateImage({
         prompt: effectivePrompt,
-        copywriting: copywritingForRender || activeTask.typographyPlan,
-        typographyPlan: copywritingForRender || activeTask.typographyPlan,
+        copywriting:
+          copywritingForRender ||
+          (qg.autoSanitizePromptCodes !== false
+            ? sanitizeCopywritingForRender(activeTask.typographyPlan || '')
+            : activeTask.typographyPlan || ''),
+        typographyPlan:
+          copywritingForRender ||
+          (qg.autoSanitizePromptCodes !== false
+            ? sanitizeCopywritingForRender(activeTask.typographyPlan || '')
+            : activeTask.typographyPlan || ''),
         studioContext: 'replica',
         replicaCategory: normalizedReplicaCategory,
         replicaFidelity: isStyleRef ? 'style_reference' : 'high_replica',
@@ -6196,19 +6372,7 @@ export default function App() {
         imageModel: config.imageModel,
         aspectRatio: activeTask.aspectRatio,
         imageSize: activeTask.imageSize,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -6402,7 +6566,9 @@ export default function App() {
 
   // Build 1-to-1 paired Replica SkuTasks and either pre-plan copywriting or start batch rendering immediately
   const handleSyncReplicaPairsAndRun = async (autoStartRender: boolean) => {
-    const prodImgs = skuReferenceImages.filter((r) => r.category !== 'case');
+    const allProdImgs = skuReferenceImages.filter((r) => r.category !== 'case');
+    const enabledProds = filterEnabledProds(allProdImgs);
+    const prodImgs = enabledProds.length > 0 ? enabledProds : allProdImgs;
     const caseImgs = skuReferenceImages.filter((r) => r.category === 'case');
 
     if (prodImgs.length === 0 && caseImgs.length === 0) {
@@ -6447,6 +6613,19 @@ export default function App() {
           ? `复刻场景 ${idx + 1}${prod?.tag ? ` · ${prod.tag}` : ''}`
           : prod?.tag || `款式 ${idx + 1}`;
 
+        // 智能姿态对位：套图模式下根据参考图 (#Case) 的标签/要求自动从已启用产品图中配对互补角度（如开盖/单耳）
+        const smartAlignedProdIds = isSingleProdMultiCase
+          ? smartPickComplementaryProds({
+              skuDiffMode: skuBatchConfig.skuDiffMode,
+              title: `${refCase?.tag || ''} ${refCase?.caseCustomRule || ''} ${ existing?.skuTitle || defaultTitle }`,
+              prompt: existing?.visualPrompt || '',
+              enabledProds: prodImgs,
+              preferredPrimaryProdId: prod?.id,
+            }).map((p) => p.id)
+          : prod
+            ? [prod.id]
+            : [];
+
         return {
           id: existing?.id || `replica-task-${Date.now()}-${idx}`,
           skuIndex: idx + 1,
@@ -6464,9 +6643,7 @@ export default function App() {
           productRefIds:
             existing?.productRefIds && existing.productRefIds.length > 0
               ? existing.productRefIds
-              : prod
-                ? [prod.id]
-                : [],
+              : smartAlignedProdIds,
           caseRefIds: refCase ? [refCase.id] : [],
           aspectRatio: skuBatchConfig.defaultAspectRatio,
           imageSize: skuBatchConfig.defaultImageSize,
@@ -6520,19 +6697,7 @@ export default function App() {
           aspectRatio: skuBatchConfig.defaultAspectRatio,
           imageSize: skuBatchConfig.defaultImageSize,
           agentModel: config.agentModel,
-          customBaseUrl:
-            activeChannel.mode === 'custom_gateway'
-              ? activeChannel.baseUrl
-              : '',
-          customApiKey:
-            activeChannel.mode === 'custom_gateway'
-              ? activeChannel.apiKey
-              : undefined,
-          customHeaders:
-            activeChannel.mode === 'custom_gateway'
-              ? activeChannel.customHeaders
-              : undefined,
-          protocol: activeChannel.protocol || 'auto',
+          ...getActiveChannelBridgeParams(),
           ossConfig: config.ossConfig,
         });
 
@@ -6563,10 +6728,28 @@ export default function App() {
           const updated = builtTasks.map((t, i) => {
             const planned = returnedList[i];
             if (!planned) return t;
-            const nextTitle = planned.title || t.skuTitle;
-            const nextBadge = planned.copywriting || t.sellingPointBadge;
-            const validBoundProdIds = (planned.boundProductIds || []).filter(
-              (id) => validProdIdSet.has(id)
+            const nextTitle = sanitizeCopywritingForRender(
+              planned.title || t.skuTitle
+            );
+            const nextBadge = sanitizeCopywritingForRender(
+              planned.copywriting || t.sellingPointBadge
+            );
+            const rawAiProdIds = (planned.boundProductIds || []).filter((id) =>
+              validProdIdSet.has(id)
+            );
+            const caseForCard = caseImgs.find((c) =>
+              t.caseRefIds.includes(c.id)
+            );
+            const sanitizedPromptText = sanitizeVisualPromptForRender(
+              planned.visualPrompt || t.visualPrompt,
+              prodImgs
+            );
+            const alignedProds = limitAndOrderTaskProdsForRender(
+              rawAiProdIds.length > 0 ? rawAiProdIds : t.productRefIds,
+              prodImgs,
+              {
+                moduleOrTitleHint: `${nextTitle} ${nextBadge} ${caseForCard?.tag || ''} ${caseForCard?.caseCustomRule || ''} ${sanitizedPromptText}`,
+              }
             );
             return {
               ...t,
@@ -6580,13 +6763,14 @@ export default function App() {
                       .filter(Boolean)
                   )
                 ).join('\n') ||
-                planned.typographyPlan ||
-                t.typographyPlan,
-              visualPrompt: planned.visualPrompt || t.visualPrompt,
+                sanitizeCopywritingForRender(
+                  planned.typographyPlan || t.typographyPlan
+                ),
+              visualPrompt: sanitizedPromptText,
               productRefIds:
-                validBoundProdIds.length > 0
-                  ? validBoundProdIds
-                  : t.productRefIds,
+                alignedProds.length > 0
+                  ? alignedProds.map((p) => p.id)
+                  : t.productRefIds.slice(0, 2),
               printThemeConfig: planned.printThemeConfig || t.printThemeConfig,
             };
           });
@@ -6595,7 +6779,7 @@ export default function App() {
           skuTasksRef.current = updated;
           if (!autoStartRender) {
             showToast(
-              `已排布 ${updated.length} 张复刻卡片（含多角度产品自动配图与印花4维联动配方），可微调后出图`,
+              `已基于左侧勾选的 ${prodImgs.length} 张产品图排布 ${updated.length} 张复刻卡片（含互补角度配图与印花4维联动配方），可微调后出图`,
               'success'
             );
           }
@@ -6622,7 +6806,9 @@ export default function App() {
     const meta =
       DETAIL_MODULE_PRESETS.find((m) => m.type === moduleType) ||
       DETAIL_MODULE_PRESETS[0];
-    const detailProds = referenceImages.filter((r) => r.category !== 'case');
+    const allDetailProds = referenceImages.filter((r) => r.category !== 'case');
+    const enabledProds = filterEnabledProds(allDetailProds);
+    const detailProds = enabledProds.length > 0 ? enabledProds : allDetailProds;
 
     setTasks((prev) => {
       const nextNum = prev.length + 1;
@@ -6633,10 +6819,13 @@ export default function App() {
           ? `核心卖点 ${sameTypeCount}`
           : meta.label;
 
-      const defaultProds =
-        moduleType === 'series_matrix'
-          ? detailProds.map((p) => p.id)
-          : detailProds.slice(0, 1).map((p) => p.id);
+      const defaultProds = smartPickComplementaryProds(
+        detailProds,
+        moduleType === 'selling_point'
+          ? `${resolvedTitle} ${meta.defaultPromptHint || ''}`
+          : moduleType,
+        moduleType === 'series_matrix' ? 4 : 2
+      ).map((p) => p.id);
 
       const created: ScreenTask = {
         id: `detail-mod-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -6674,7 +6863,9 @@ export default function App() {
       'package_contents',
       'after_sales',
     ];
-    const detailProds = referenceImages.filter((r) => r.category !== 'case');
+    const allDetailProds = referenceImages.filter((r) => r.category !== 'case');
+    const enabledProds = filterEnabledProds(allDetailProds);
+    const detailProds = enabledProds.length > 0 ? enabledProds : allDetailProds;
     let spCounter = 0;
 
     const createdList: ScreenTask[] = standardSequence.map((modType, idx) => {
@@ -6684,10 +6875,13 @@ export default function App() {
       if (modType === 'selling_point') spCounter += 1;
       const title =
         modType === 'selling_point' ? `核心卖点 ${spCounter}` : meta.label;
-      const boundIds =
-        modType === 'series_matrix'
-          ? detailProds.map((p) => p.id)
-          : detailProds.slice(0, 1).map((p) => p.id);
+      const boundIds = smartPickComplementaryProds(
+        detailProds,
+        modType === 'selling_point' && spCounter === 2
+          ? 'comfort_wear'
+          : modType,
+        modType === 'series_matrix' ? 4 : 2
+      ).map((p) => p.id);
 
       return {
         id: `detail-std-${Date.now()}-${idx}`,
@@ -6777,19 +6971,7 @@ export default function App() {
         productImages: detailProds.map((p) => toLightweightRefPayload(p)),
         productInfoText,
         agentModel: config.agentModel,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
       if (res.unifiedVisualSpec) {
@@ -6862,24 +7044,80 @@ export default function App() {
     );
   };
 
+  // Toggle & Batch-set #Prod participation in SKU Studio
+  const handleToggleSkuAssetEnabled = (refId: string) => {
+    setSkuReferenceImages((prev) =>
+      prev.map((item) =>
+        item.id === refId
+          ? { ...item, enabled: item.enabled === false ? true : false }
+          : item
+      )
+    );
+  };
+
+  const handleBatchSetSkuAssetsEnabled = (mode: QuickAssetSelectMode) => {
+    setSkuReferenceImages((prev) => applyQuickAssetSelectionMode(prev, mode));
+    const modeLabel =
+      mode === 'all'
+        ? '已全选所有产品图参与生图'
+        : mode === 'single_sku_multi_angle'
+          ? '已智选「1款主推花色 + 多角度特写」，防止多花色混投变形'
+          : mode === 'multi_sku_front_only'
+            ? '已智选「各款不同花色正面图」，适合全家福与多花色裂变'
+            : '已反选产品图参与状态';
+    showToast(modeLabel, 'success');
+  };
+
+  // Toggle & Batch-set #Prod participation in Detail Studio
+  const handleToggleDetailAssetEnabled = (refId: string) => {
+    setReferenceImages((prev) =>
+      prev.map((item) =>
+        item.id === refId
+          ? { ...item, enabled: item.enabled === false ? true : false }
+          : item
+      )
+    );
+  };
+
+  const handleBatchSetDetailAssetsEnabled = (mode: QuickAssetSelectMode) => {
+    setReferenceImages((prev) => applyQuickAssetSelectionMode(prev, mode));
+    const modeLabel =
+      mode === 'all'
+        ? '已全选所有产品图参与详情页生成'
+        : mode === 'single_sku_multi_angle'
+          ? '已智选「1款主推花色 + 多角度特写」，防止详情页多花色打架变形'
+          : mode === 'multi_sku_front_only'
+            ? '已智选「各款不同花色正面图」，适合多花色矩阵屏'
+            : '已反选产品图参与状态';
+    showToast(modeLabel, 'success');
+  };
+
   // Build Standard 5 Main Image Cards (KV首焦 + Bento全卖点 + 单卖点深挖1 + 单卖点深挖2 + 多花色全家福)
   const handleBuildStandardFiveMainCards = () => {
-    const skuProds = skuReferenceImages.filter((r) => r.category !== 'case');
+    const allSkuProds = skuReferenceImages.filter((r) => r.category !== 'case');
+    const enabledSkuProds = filterEnabledProds(allSkuProds);
+    const skuProds = enabledSkuProds.length > 0 ? enabledSkuProds : allSkuProds;
     const skuCases = skuReferenceImages.filter((r) => r.category === 'case');
 
-    const pickProdsByRoles = (
-      preferredRoles: string[],
-      fallbackIndex: number,
-      maxCount = 1
+    const primaryHeroProd =
+      skuProds.find(
+        (p) => inferProdAngleRoleFromAsset(p) === 'hero_front'
+      ) || skuProds[0];
+
+    const pickSlotProdIds = (
+      slotTitle: string,
+      slotPrompt: string,
+      isMatrixSlot = false
     ) => {
-      const matched = skuProds.filter((p) =>
-        preferredRoles.includes(p.prodAngleRole || '')
-      );
-      if (matched.length > 0) {
-        return matched.slice(0, maxCount).map((m) => m.id);
-      }
-      if (skuProds.length === 0) return [];
-      return [skuProds[fallbackIndex % skuProds.length].id];
+      const picked = smartPickComplementaryProds({
+        skuDiffMode: isMatrixSlot ? 'multi_sku' : skuBatchConfig.skuDiffMode,
+        title: slotTitle,
+        prompt: slotPrompt,
+        enabledProds: skuProds,
+        preferredPrimaryProdId: primaryHeroProd?.id,
+        maxCount: isMatrixSlot ? 6 : 2,
+      });
+      return picked.map((p) => p.id);
     };
 
     const fiveSlots = [
@@ -6888,8 +7126,11 @@ export default function App() {
         badge: '旗舰新品 · 高颜值潮玩声学体验',
         spec: '蓝牙V6.0 | ENC通话降噪 | 舒适久戴',
         prompt:
-          '电商主图首焦KV构图：居中偏下打造圆润潮玩主题微缩底座，产品开盖或正面高光C位展示，上方预留呼吸感大标题视觉区，底部搭配同色系圆角卖点胶囊条。',
-        prodIds: pickProdsByRoles(['open_case', 'hero_front'], 0, 2),
+          '电商主图首焦KV构图：居中偏下打造圆润潮玩主题微缩底座，产品开盖或正面高光C位展示，上方预留呼吸感大标题视觉区，底部搭配同色系浅色圆角卖点信息栏。',
+        prodIds: pickSlotProdIds(
+          '主图1 · 旗舰首焦KV视觉',
+          '产品开盖与正面高光C位展示'
+        ),
       },
       {
         title: '主图2 · 核心卖点Bento宫格合集',
@@ -6897,10 +7138,9 @@ export default function App() {
         spec: '复合振膜声学 | 双模式低延迟 | 超长续航',
         prompt:
           '电商主图Bento模块化信息宫格构图：上方展示产品多角度高光主体，下方划分为4~6个圆角磨砂信息宫格卡片，清晰呈现声学振膜、蓝牙芯片、续航与降噪核心卖点。',
-        prodIds: pickProdsByRoles(
-          ['hero_front', 'open_case', 'detail_closeup'],
-          1,
-          3
+        prodIds: pickSlotProdIds(
+          '主图2 · 核心卖点Bento宫格合集',
+          '产品正面与开盖细节展示'
         ),
       },
       {
@@ -6908,11 +7148,10 @@ export default function App() {
         badge: '殿堂级HIFI声学 · 沉浸式纯净听感',
         spec: '13mm大动圈单元 | 智能自适应ENC降噪',
         prompt:
-          '单卖点特写深挖构图：微距高光呈现产品声学结构与腔体细节，背景环绕同色系半透明声波能量环与漂浮3D音符装饰，底部并列双圆角胶囊卡对比音乐/游戏模式。',
-        prodIds: pickProdsByRoles(
-          ['detail_closeup', 'single_earbud', 'open_case'],
-          2,
-          2
+          '单卖点特写深挖构图：微距高光呈现产品声学结构与腔体细节，背景环绕同色系半透明声波能量环与漂浮3D音符装饰，底部并列双圆角浅色信息卡对比音乐/游戏模式。',
+        prodIds: pickSlotProdIds(
+          '主图3 · 声学音质/降噪单卖点深挖',
+          '单耳声学腔体与微距结构细节'
         ),
       },
       {
@@ -6920,8 +7159,11 @@ export default function App() {
         badge: '人体工学云感贴合 · 轻若无物久戴不痛',
         spec: '羽量级机身 | 亲肤柔韧材质 | 狂甩不掉',
         prompt:
-          '舒适佩戴与轻量质感特写构图：单耳/侧面优雅悬浮于蓬松云朵与羽毛质感微缩舞台上，直观传递轻盈零压迫感，底部配置双圆角浅色参数胶囊卡。',
-        prodIds: pickProdsByRoles(['single_earbud', 'hero_front'], 3, 2),
+          '舒适佩戴与轻量质感特写构图：单耳/侧面优雅悬浮于蓬松云朵与羽毛质感微缩舞台上，直观传递轻盈零压迫感，底部配置双圆角浅色参数信息卡。',
+        prodIds: pickSlotProdIds(
+          '主图4 · 云感舒适佩戴体验深挖',
+          '单耳入耳舒适佩戴特写'
+        ),
       },
       {
         title: '主图5 · 多彩印花SKU全家福矩阵',
@@ -6929,10 +7171,11 @@ export default function App() {
         spec: '全系花色集结 · 百搭潮酷出街',
         prompt:
           '多花色SKU全家福阵列构图：采用对角线阶梯或扇形色块阵列排布多款不同印花/配色的产品主体，每款下方对应同色系丝滑色带与光影，展现丰富潮玩系列感。',
-        prodIds:
-          skuProds.length > 1
-            ? skuProds.slice(0, 5).map((p) => p.id)
-            : pickProdsByRoles(['multi_sku', 'hero_front'], 0, 1),
+        prodIds: pickSlotProdIds(
+          '主图5 · 多彩印花SKU全家福矩阵',
+          '多花色SKU全家福阵列',
+          true
+        ),
       },
     ];
 
@@ -6972,7 +7215,7 @@ export default function App() {
           themeStage: '泡泡玛特风圆润软胶与亚克力双层微缩底座',
           themeElements: '2~3个与机身印花呼应的3D漂浮软胶小道具与透明气泡',
           themeUiStyle:
-            '与印花同色系的浅奶油色圆角胶囊信息卡(严禁生硬黑棕色块)',
+            '与印花同色系的浅奶油色圆角矩形信息卡(严禁生硬黑棕色块)',
         },
         status: 'idle',
         historyImages: [],
@@ -7027,80 +7270,112 @@ export default function App() {
 
     const palettePool = [
       {
-        keywords: ['芝士', '奶酪', '黄', '鼠', '火箭', '星', 'cheese'],
+        keywords: ['钓鱼', '鱼', '海', '浪', '企鹅', '冲浪', '冰', '鲸', 'blue'],
+        palette:
+          '60%奶盐海浪蓝(#F0F9FF) + 30%马卡龙天蓝(#BAE6FD) + 10%活力柠檬黄(#FDE047)',
+        stage: '微缩清透果冻海浪圆盘与奶油沙滩浮标双层展台',
+        elements: '漂浮3D迷你幸运鱼罐头、透明水珠泡泡与Q版小海星',
+        ui: '冰川奶蓝毛玻璃圆角卖点信息卡(严禁黑棕色块)，深海蓝圆体字与亮黄星标',
+      },
+      {
+        keywords: ['芝士', '奶酪', '黄', '鼠', '火箭', '星', '鸭', '花洒', 'cheese'],
         palette:
           '60%奶油起司黄(#FEF9C3) + 30%暖杏仁奶白(#FEF3C7) + 10%焦糖芝士橙(#F59E0B)',
         stage: '多孔切达奶酪块微缩底座与奶油环形柔光跑道展台',
         elements: '漂浮3D迷你三角芝士块、小星球光环与Q版立体音符',
-        ui: '浅奶油黄磨砂圆角胶囊信息卡(严禁黑棕色块)，暖棕圆体字与亮黄星标',
+        ui: '浅奶油黄磨砂圆角矩形信息卡(严禁黑棕色块)，暖棕圆体字与亮黄星标',
       },
       {
-        keywords: ['兔', '梦', '紫', '月', '云', '甜', 'dream'],
+        keywords: ['水豚', '温泉', '橘', '橙', '松鼠', '烘焙', '面包', '拉面', '茶'],
+        palette:
+          '60%暖杏奶茶米(#FFFBEB) + 30%蜜柑果冻橙(#FFEDD5) + 10%焦糖肉桂橘(#F97316)',
+        stage: '日式暖木汤屋圆润微缩托盘与奶油蒸汽云朵展台',
+        elements: '漂浮3D迷你小柑橘、暖白温泉水汽团与圆润治愈小木牌',
+        ui: '暖杏奶油色磨砂圆角卖点信息卡(严禁黑棕色块)，焦糖深棕圆体字',
+      },
+      {
+        keywords: ['兔', '梦', '紫', '月', '云', '船', '夜', 'dream'],
         palette:
           '60%梦幻薰衣草紫(#F3E8FF) + 30%雾面婴儿蓝(#E0F2FE) + 10%暖金星芒黄(#FDE047)',
         stage: '软糯棉花糖云朵微缩托盘与半透明弯月星轨底座',
         elements: '漂浮3D微笑云朵、金色小十字星芒与奶油睡眠泡泡',
-        ui: '浅丁香紫毛玻璃圆角卖点胶囊卡，深紫罗兰圆润字体与暖金胶囊边框',
+        ui: '浅丁香紫毛玻璃圆角卖点信息卡，深紫罗兰圆润字体与暖金细边框',
       },
       {
-        keywords: ['刺猬', '梨', '露营', '绿', '森', '花', 'camp'],
+        keywords: ['刺猬', '梨', '露营', '绿', '森', '花', '蘑菇', 'camp'],
         palette:
           '60%牛油果奶绿(#ECFDF5) + 30%燕麦奶油白(#FEFCE8) + 10%阳光雏菊黄(#FACC15)',
         stage: '微缩森系奶油花朵圆盘底座与果冻质感阶梯舞台',
         elements: '漂浮3D软胶小雏菊、微缩立体洋梨与露营小星火',
-        ui: '浅抹茶奶白圆角贴纸式卖点胶囊卡，森系深绿圆体字与鹅黄微标',
+        ui: '浅抹茶奶白圆角贴纸式卖点信息卡，森系深绿圆体字与鹅黄微标',
       },
       {
-        keywords: ['粉', '桃', '猫', '爱', '草', '黑', 'pink'],
+        keywords: ['粉', '桃', '猫', '爱', '草', '苺', '气球', 'pink'],
         palette:
           '60%奶油蜜桃粉(#FFF0F3) + 30%草莓牛奶粉(#FFD6E0) + 10%糖果玫红(#FF4D79)',
         stage: '泡泡玛特风圆润果冻亚克力与奶油云朵双层微缩展台',
         elements: '漂浮3D软胶小爱心、微缩透明气泡球与立体Q版小星星',
-        ui: '奶油草莓粉磨砂圆角胶囊信息卡(严禁黑棕色块)，配圆体柔光标题',
-      },
-      {
-        keywords: ['蓝', '海', '冰', '鲸', 'blue'],
-        palette:
-          '60%奶盐冰川蓝(#F0F9FF) + 30%马卡龙天蓝(#BAE6FD) + 10%星芒奶黄(#FDE047)',
-        stage: '蓬松云朵质感软胶底座与星轨环形微发光展台',
-        elements: '漂浮3D微缩弯月、透明梦幻泡泡与圆润五角星挂饰',
-        ui: '冰川奶蓝毛玻璃圆角卖点胶囊卡，深海蓝圆体字与亮黄星标',
+        ui: '奶油草莓粉磨砂圆角矩形信息卡(严禁黑棕色块)，配圆体柔光标题',
       },
     ];
+
+    // Preserve any structural complementary angle (open_case / single_earbud / detail_closeup) from the master card so open-case or earbud poses don't lose internal structure reference
+    const sourceComplementaryAngleIds = sourceTask.productRefIds.filter((id) => {
+      const item = nextRefPool.find((r) => r.id === id);
+      if (!item) return false;
+      const role = item.prodAngleRole || inferProdAngleRoleFromAsset(item);
+      return (
+        role === 'open_case' ||
+        role === 'single_earbud' ||
+        role === 'detail_closeup'
+      );
+    });
 
     const startIdx = skuTasksRef.current.length;
     const fissioned: SkuTask[] = targetProdIds.map((prodId, idx) => {
       const prod = nextRefPool.find((r) => r.id === prodId);
-      const prodLabel = prod?.tag || `花色款式 ${idx + 1}`;
+      const prodLabel = (prod?.tag || `花色款式 ${idx + 1}`)
+        .replace(/[-_·]*(?:闭盖|合盖)?正立面|正面印花/g, '')
+        .trim();
       const matchedPreset =
         palettePool.find((p) =>
           p.keywords.some((kw) => prodLabel.toLowerCase().includes(kw))
         ) || palettePool[idx % palettePool.length];
       const baseTitle = sourceTask.skuTitle.replace(/·.*$/, '').trim();
       const nextTitle = `${baseTitle} · ${prodLabel}`;
+      const combinedProdIds = Array.from(
+        new Set([prodId, ...sourceComplementaryAngleIds])
+      ).slice(0, 2);
+
       return {
         ...sourceTask,
         id: `sku-fission-${Date.now()}-${idx}`,
         skuIndex: startIdx + idx + 1,
         skuTitle: nextTitle,
-        colorMaterialNote: `严格还原 #${prod?.code || 'Prod'} (${prodLabel}) 机身印花与材质配色`,
-        typographyPlan: [
-          nextTitle,
-          sourceTask.sellingPointBadge,
-          sourceTask.packageSpecNote,
-        ]
-          .map((s) => (s || '').trim())
-          .filter(Boolean)
-          .join('\n'),
-        productRefIds: [prodId],
+        colorMaterialNote: `严格还原「${prodLabel}」机身印花与材质配色`,
+        typographyPlan: sanitizeCopywritingForRender(
+          [
+            nextTitle,
+            sourceTask.sellingPointBadge,
+            sourceTask.packageSpecNote,
+          ]
+            .map((s) => (s || '').trim())
+            .filter(Boolean)
+            .join('\n')
+        ),
+        visualPrompt: sanitizeVisualPromptForRender(sourceTask.visualPrompt),
+        productRefIds: combinedProdIds,
         caseRefIds: promotedCaseId
           ? [promotedCaseId]
           : sourceTask.caseRefIds,
         printThemeConfig: {
-          enabled: true,
+          enabled: sourceTask.styleLinkageMode !== 'lock_scene',
           printStory: `${prodLabel} · 专属印花4维联动微缩场景`,
           themePalette: matchedPreset.palette,
-          themeStage: matchedPreset.stage,
+          themeStage:
+            useResultAsCase && sourceTask.printThemeConfig?.themeStage
+              ? sourceTask.printThemeConfig.themeStage
+              : matchedPreset.stage,
           themeElements: `围绕「${prodLabel}」衍生：${matchedPreset.elements}`,
           themeUiStyle: matchedPreset.ui,
         },
@@ -7117,7 +7392,7 @@ export default function App() {
     setSkuTasks(nextAllTasks);
 
     showToast(
-      `已按「${sourceTask.skuTitle}」母版裂变创建 ${targetProdIds.length} 张新花色卡片，并自动配置专属印花4维联动配方！`,
+      `已按「${sourceTask.skuTitle}」母版裂变创建 ${targetProdIds.length} 张新花色卡片${sourceComplementaryAngleIds.length > 0 ? '（已自动继承互补结构视角）' : ''}！`,
       'success'
     );
 
@@ -7141,19 +7416,37 @@ export default function App() {
       return;
     }
 
+    // Sync both missing assets AND updated enabled/prodAngleRole/tag states from SKU Studio
+    const skuByKey = new Map<string, ReferenceImageItem>();
+    for (const sp of skuProds) {
+      skuByKey.set(sp.id, sp);
+      if (sp.name) skuByKey.set(`name:${sp.name}`, sp);
+    }
+
     const existingIds = new Set(referenceImages.map((r) => r.id));
     const missingProds = skuProds.filter((p) => !existingIds.has(p.id));
-    if (missingProds.length > 0) {
-      setReferenceImages((prev) =>
-        reindexReferenceCodes([...prev, ...missingProds])
-      );
-      showToast(
-        `已从主图工作台同步 ${missingProds.length} 张自有产品原图 (#Prod) 到详情页工作台！`,
-        'success'
-      );
-    } else {
-      showToast('主图工作台的所有产品图 (#Prod) 已在当前详情页素材池中', 'info');
-    }
+
+    setReferenceImages((prev) => {
+      const updatedExisting = prev.map((r) => {
+        if (r.category === 'case') return r;
+        const match = skuByKey.get(r.id) || (r.name ? skuByKey.get(`name:${r.name}`) : undefined);
+        if (!match) return r;
+        return {
+          ...r,
+          enabled: match.enabled,
+          prodAngleRole: match.prodAngleRole || r.prodAngleRole,
+          tag: match.tag || r.tag,
+        };
+      });
+      return reindexReferenceCodes([...updatedExisting, ...missingProds]);
+    });
+
+    showToast(
+      missingProds.length > 0
+        ? `已从主图工作台同步 ${missingProds.length} 张产品原图及全部勾选/视角标签至详情页工作台！`
+        : '已将主图工作台的产品勾选启用状态与视角标签同步至详情页！',
+      'success'
+    );
   };
 
   // Append tail 3 standard detail modules (规格参数表 + 包装清单 + 售后保障) with 4D Print Theme inheritance
@@ -7239,10 +7532,11 @@ export default function App() {
       return;
     }
 
-    // 1. Sync any #Prod assets from SKU Studio into Detail Studio referenceImages & build canonical ID mapping
+    // 1. Sync any #Prod assets from SKU Studio into Detail Studio referenceImages (including enabled & prodAngleRole) & build canonical ID mapping
     const skuProds = skuReferenceImages.filter((r) => r.category !== 'case');
     const skuIdToDetailIdMap = new Map<string, string>();
     const missingProds: ReferenceImageItem[] = [];
+    const matchedUpdates = new Map<string, Partial<ReferenceImageItem>>();
 
     for (const sp of skuProds) {
       const existingMatch = referenceImages.find(
@@ -7254,20 +7548,27 @@ export default function App() {
       );
       if (existingMatch) {
         skuIdToDetailIdMap.set(sp.id, existingMatch.id);
+        matchedUpdates.set(existingMatch.id, {
+          enabled: sp.enabled,
+          prodAngleRole: sp.prodAngleRole || existingMatch.prodAngleRole,
+          tag: sp.tag || existingMatch.tag,
+        });
       } else {
         skuIdToDetailIdMap.set(sp.id, sp.id);
         missingProds.push(sp);
       }
     }
 
-    let mergedDetailRefs = referenceImages;
-    if (missingProds.length > 0) {
-      mergedDetailRefs = reindexReferenceCodes([
-        ...referenceImages,
-        ...missingProds,
-      ]);
-      setReferenceImages(mergedDetailRefs);
-    }
+    const updatedExistingRefs = referenceImages.map((r) => {
+      const patch = matchedUpdates.get(r.id);
+      return patch ? { ...r, ...patch } : r;
+    });
+    const mergedDetailRefs = reindexReferenceCodes([
+      ...updatedExistingRefs,
+      ...missingProds,
+    ]);
+    setReferenceImages(mergedDetailRefs);
+
     const detailProds = mergedDetailRefs.filter((r) => r.category !== 'case');
     const validDetailProdIds = new Set(detailProds.map((p) => p.id));
 
@@ -7302,8 +7603,24 @@ export default function App() {
         useResultAsAnchor && st.resultImageUrl ? st.resultImageUrl : undefined;
 
       const reframingHint = anchorUrl
-        ? `【主图转${targetRatio}竖版延展】：基于已生成的1:1主图同源画面，保持产品主体、潮玩底座与核心光影一致，将上下画布纵向延展为${targetRatio}电商详情分屏（上22%大标题区 + 中54%产品主体舞台 + 下24%圆角卖点胶囊区）。\n`
+        ? `【主图转${targetRatio}竖版延展】：基于已生成的1:1主图同源画面，保持产品主体、潮玩底座与核心光影一致，将上下画布纵向延展为${targetRatio}电商详情分屏（上22%大标题区 + 中54%产品主体舞台 + 下24%浅色圆角卖点信息卡区）。\n`
         : '';
+
+      const cleanCopy = sanitizeCopywritingForRender(
+        copyText || st.typographyPlan || st.skuTitle
+      );
+      const cleanPrompt = sanitizeVisualPromptForRender(
+        `${reframingHint}${st.visualPrompt || ''}`.trim()
+      );
+      const cappedRefIds = limitAndOrderTaskProdsForRender(
+        mappedProdIds.length > 0
+          ? mappedProdIds
+          : detailProds.slice(0, 1).map((p) => p.id),
+        detailProds,
+        {
+          moduleOrTitleHint: `${moduleType} ${st.skuTitle || ''}`,
+        }
+      ).map((p) => p.id);
 
       return {
         id: `detail-from-main-${Date.now()}-${idx}`,
@@ -7311,19 +7628,18 @@ export default function App() {
         screenCategory: 'detail',
         moduleType,
         layerType: 'dynamic',
-        title: st.skuTitle || `主图延展第 ${idx + 1} 屏`,
+        title: sanitizeCopywritingForRender(
+          st.skuTitle || `主图延展第 ${idx + 1} 屏`
+        ),
         sectionType: meta.label,
-        copywriting: copyText || st.typographyPlan || st.skuTitle,
-        typographyPlan: copyText || st.typographyPlan || st.skuTitle,
+        copywriting: cleanCopy,
+        typographyPlan: cleanCopy,
         benchmarkCase: anchorUrl
           ? `1:1主图同源延展 (${targetRatio})`
           : '主图同源配方重绘',
-        visualPrompt: `${reframingHint}${st.visualPrompt || ''}`.trim(),
+        visualPrompt: cleanPrompt,
         textMode: st.textMode || config.requirements.textMode,
-        referenceImageIds:
-          mappedProdIds.length > 0
-            ? mappedProdIds
-            : detailProds.slice(0, 1).map((p) => p.id),
+        referenceImageIds: cappedRefIds,
         caseDeliveryOverride: 'none',
         sourceReplicaImageUrl: anchorUrl,
         printThemeConfig: st.printThemeConfig
@@ -7339,16 +7655,56 @@ export default function App() {
       };
     });
 
-    setConfig((prev) => ({
-      ...prev,
-      requirements: {
-        ...prev.requirements,
-        detailAspectRatio: targetRatio,
-      },
-    }));
+    const primaryTheme = sourceList.find(
+      (s) => s.printThemeConfig?.themePalette
+    )?.printThemeConfig;
+
+    setConfig((prev) => {
+      const existingSpec = prev.requirements.unifiedVisualSpec?.trim() || '';
+      const autoSpec =
+        !existingSpec && primaryTheme
+          ? `【①60-30-10色板锚点】：${primaryTheme.themePalette}；【②展台与空间材质锚点】：${primaryTheme.themeStage || '圆润潮玩微缩展台'}，搭配${primaryTheme.themeElements || '同色系3D漂浮装饰'}；【③三段式留白与浅色信息卡】：${primaryTheme.themeUiStyle || '通透浅色圆角信息卡（严禁黑棕色块）'}。`
+          : existingSpec;
+      return {
+        ...prev,
+        requirements: {
+          ...prev.requirements,
+          detailAspectRatio: targetRatio,
+          unifiedVisualSpec: autoSpec,
+        },
+      };
+    });
 
     if (singleTask) {
       setTasks((prev) => {
+        const firstConverted = convertedScreens[0];
+        if (!firstConverted) return prev;
+        // 若当前详情页为空，或第1屏是尚未生成成图的首屏KV且用户传的是已出成图的主图卡，则直接作为首屏KV视觉基准并同步全页色板
+        if (
+          prev.length > 0 &&
+          firstConverted.sourceReplicaImageUrl &&
+          prev[0].moduleType === 'kv_hero' &&
+          !prev[0].resultImageUrl
+        ) {
+          const updatedFirst: ScreenTask = {
+            ...firstConverted,
+            id: prev[0].id,
+            screenNumber: 1,
+            moduleType: 'kv_hero',
+            sectionType: '首屏主视觉海报',
+          };
+          const rest = prev.slice(1).map((t, idx) => ({
+            ...t,
+            screenNumber: idx + 2,
+            printThemeConfig:
+              primaryTheme && (!t.printThemeConfig || !t.printThemeConfig.themePalette)
+                ? { ...primaryTheme, enabled: true }
+                : t.printThemeConfig,
+          }));
+          const next = [updatedFirst, ...rest];
+          tasksRef.current = next;
+          return next;
+        }
         const next = [...prev, ...convertedScreens].map((t, i) => ({
           ...t,
           screenNumber: i + 1,
@@ -7364,14 +7720,19 @@ export default function App() {
     setActiveTopTab('detail_studio');
     showToast(
       singleTask
-        ? `已将「${singleTask.skuTitle}」转为 ${targetRatio} 详情页分屏模块并加入 ① 详情页工作台！`
+        ? singleTask.resultImageUrl && useResultAsAnchor
+          ? `已将「${singleTask.skuTitle}」满意成图作为同源视觉基准延展至 ② 详情页工作台 (${targetRatio})，并同步4维色板！`
+          : `已将「${singleTask.skuTitle}」转为 ${targetRatio} 详情页分屏模块并加入 ② 详情页工作台！`
         : `已将全套 ${convertedScreens.length} 张主图一键流转为 ${targetRatio} 详情页分屏！可继续追加收尾参数屏或直接生成`,
       'success'
     );
   };
 
   const handleAiPlanDetailModules = async (autoStartBatchAfter = false) => {
-    const detailProds = referenceImages.filter((r) => r.category !== 'case');
+    const allDetailProds = referenceImages.filter((r) => r.category !== 'case');
+    const enabledDetailProds = filterEnabledProds(allDetailProds);
+    const detailProds =
+      enabledDetailProds.length > 0 ? enabledDetailProds : allDetailProds;
     if (detailProds.length === 0 && !productInfoText.trim()) {
       showToast('请先上传至少 1 张自有产品图 (#Prod) 或填写产品卖点信息', 'error');
       return;
@@ -7385,6 +7746,7 @@ export default function App() {
 
     setIsParsingPlan(true);
     try {
+      const enabledProdIdSet = new Set(detailProds.map((p) => p.id));
       const res = await studioBridge.planDetailModules({
         productImages: detailProds.map((p) => toLightweightRefPayload(p)),
         productInfoText,
@@ -7395,26 +7757,16 @@ export default function App() {
           moduleType: t.moduleType || 'selling_point',
           title: t.title,
           userNote: t.userNote || '',
-          boundProductIds: t.referenceImageIds,
+          boundProductIds: t.referenceImageIds.filter((id) =>
+            enabledProdIdSet.has(id)
+          ),
         })),
         aspectRatio: config.requirements.detailAspectRatio,
         imageSize: config.defaultImageSize,
         textMode: config.requirements.textMode,
         agentModel: config.agentModel,
         enableHighThinking: config.enableHighThinking,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -7455,20 +7807,37 @@ export default function App() {
             res.plannedModules.find((pm) => pm.id === t.id) ||
             res.plannedModules[idx];
           if (!planned) return t;
+          const cleanCopy = sanitizeCopywritingForRender(
+            planned.copywriting || t.copywriting
+          );
+          const cleanPrompt = sanitizeVisualPromptForRender(
+            planned.visualPrompt || t.visualPrompt,
+            detailProds
+          );
+          const plannedProdIds = Array.isArray(planned.boundProductIds)
+            ? planned.boundProductIds.filter((id) => enabledProdIdSet.has(id))
+            : [];
+          const cappedProdIds =
+            plannedProdIds.length > 0
+              ? limitAndOrderTaskProdsForRender(plannedProdIds, detailProds, {
+                  moduleOrTitleHint: `${t.moduleType || ''} ${planned.title || t.title}`,
+                }).map((p) => p.id)
+              : smartPickComplementaryProds(
+                  detailProds,
+                  t.moduleType || t.title,
+                  t.moduleType === 'series_matrix' ? 4 : 2
+                ).map((p) => p.id);
           return {
             ...t,
             screenNumber: idx + 1,
-            title: planned.title || t.title,
+            title: sanitizeCopywritingForRender(planned.title || t.title),
             sectionType: planned.sectionType || t.sectionType,
-            copywriting: planned.copywriting || t.copywriting,
-            typographyPlan:
-              planned.typographyPlan || planned.copywriting || t.typographyPlan,
-            visualPrompt: planned.visualPrompt || t.visualPrompt,
-            referenceImageIds:
-              Array.isArray(planned.boundProductIds) &&
-              planned.boundProductIds.length > 0
-                ? planned.boundProductIds
-                : t.referenceImageIds,
+            copywriting: cleanCopy,
+            typographyPlan: sanitizeCopywritingForRender(
+              planned.typographyPlan || cleanCopy || t.typographyPlan
+            ),
+            visualPrompt: cleanPrompt,
+            referenceImageIds: cappedProdIds,
             printThemeConfig: planned.printThemeConfig
               ? {
                   ...planned.printThemeConfig,
@@ -7541,19 +7910,7 @@ export default function App() {
         })),
         skuDiffMode: skuBatchConfig.skuDiffMode,
         agentModel: config.agentModel,
-        customBaseUrl:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.baseUrl
-            : '',
-        customApiKey:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.apiKey
-            : undefined,
-        customHeaders:
-          activeChannel.mode === 'custom_gateway'
-            ? activeChannel.customHeaders
-            : undefined,
-        protocol: activeChannel.protocol || 'auto',
+        ...getActiveChannelBridgeParams(),
         ossConfig: config.ossConfig,
       });
 
@@ -9232,7 +9589,11 @@ export default function App() {
 
   const handleAddCustomChannel = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newChannelForm.name.trim() || !newChannelForm.baseUrl.trim()) {
+    const isCodexProto = newChannelForm.protocol === 'codex-cli';
+    if (
+      !newChannelForm.name.trim() ||
+      (!newChannelForm.baseUrl.trim() && !isCodexProto)
+    ) {
       showToast('请填写自定义通道名称与接口 Base URL', 'error');
       return;
     }
@@ -9245,8 +9606,11 @@ export default function App() {
         {
           id: newId,
           name: newChannelForm.name.trim(),
-          mode: 'custom_gateway',
-          baseUrl: newChannelForm.baseUrl.trim(),
+          mode: isCodexProto ? 'codex_cli' : 'custom_gateway',
+          baseUrl:
+            newChannelForm.baseUrl.trim() ||
+            (isCodexProto ? 'codex://local' : ''),
+          cliCommand: isCodexProto ? 'codex' : undefined,
           apiKey: newChannelForm.apiKey.trim() || undefined,
           customHeaders: newChannelForm.customHeaders.trim() || undefined,
           protocol: newChannelForm.protocol,
@@ -9264,7 +9628,12 @@ export default function App() {
       concurrency: 2,
     });
     setShowNewChannelForm(false);
-    showToast('已添加并切换至新的自定义接口通道（含独立密钥配置）', 'success');
+    showToast(
+      isCodexProto
+        ? '已添加并切换至本地 Codex CLI 通道'
+        : '已添加并切换至新的自定义接口通道（含独立密钥配置）',
+      'success'
+    );
   };
 
   const handleDeleteCustomChannel = (channelId: string) => {
@@ -9625,6 +9994,8 @@ export default function App() {
           onSyncReplicaPairsAndRun={handleSyncReplicaPairsAndRun}
           onExtendReplicaToDetail={handleExtendReplicaToDetail}
           onUpdateSkuProdRole={handleUpdateSkuProdRole}
+          onToggleSkuAssetEnabled={handleToggleSkuAssetEnabled}
+          onBatchSetSkuAssetsEnabled={handleBatchSetSkuAssetsEnabled}
           onFissionTaskToOtherProds={handleFissionTaskToOtherProds}
           onBuildStandardFiveMainCards={handleBuildStandardFiveMainCards}
           sellingPointPresets={
@@ -9812,6 +10183,8 @@ export default function App() {
             })
           }
           onUpdateDetailProdRole={handleUpdateDetailProdRole}
+          onToggleDetailAssetEnabled={handleToggleDetailAssetEnabled}
+          onBatchSetDetailAssetsEnabled={handleBatchSetDetailAssetsEnabled}
           onUpdateDetailAssetTag={handleUpdateDetailAssetTag}
           onAutoAnalyzeDetailRefs={handleAutoAnalyzeReferenceTags}
           onSyncFromSkuStudio={handleSyncFromSkuStudioToDetail}
@@ -9889,11 +10262,11 @@ export default function App() {
                     全局设置中心
                   </span>
                   <h3 className="text-lg font-bold text-slate-900">
-                    预置兜底方案、模型通道池与云存储设置
+                    双工作台预置兜底、生图防变形护栏、模型通道池与云存储设置
                   </h3>
                 </div>
                 <p className="text-xs text-slate-500">
-                  在此设定的「SKU 常用卖点方案库」与「默认标题公式/规格」受全局持久化保护，点击顶栏重置后会自动作为兜底方案恢复
+                  在此设定的「通用卖点方案库」、「双工作台默认参数」与「防变形全局护栏」受持久化保护，点击顶栏重置后自动作为兜底方案恢复
                 </p>
               </div>
 
@@ -9993,13 +10366,13 @@ export default function App() {
                 }`}
               >
                 <Monitor className="w-4 h-4" />
-                <span>5. 桌面端架构</span>
+                <span>5. 本地缓存 & 桌面架构</span>
               </button>
             </div>
 
             {/* Modal Scrollable Body (Unified Height Viewport) */}
             <div className="flex-1 overflow-y-auto px-7 py-6 space-y-6 bg-slate-50/40">
-              {/* ================= TAB 0 (NEW): PRESETS & RESET-PROOF FALLBACK DEFAULTS ================= */}
+              {/* ================= TAB 0: DUAL-WORKBENCH PRESETS, FALLBACK DEFAULTS & QUALITY GUARD ENGINE ================= */}
               {apiConfigTab === 'presets_fallback' && (() => {
                 const activeSpPresets =
                   config.defaultSellingPointPresets &&
@@ -10013,6 +10386,11 @@ export default function App() {
                 const fb: SkuDefaultFallbackConfig = {
                   ...DEFAULT_SKU_FALLBACK_CONFIG,
                   ...(config.skuDefaultFallback || {}),
+                };
+
+                const qg: QualityGuardGlobalConfig = {
+                  ...DEFAULT_QUALITY_GUARD_CONFIG,
+                  ...(config.qualityGuardConfig || {}),
                 };
 
                 const syncGlobalSellingPointPresets = (
@@ -10041,12 +10419,25 @@ export default function App() {
                   }));
                 };
 
+                const updateQualityGuardPatch = (
+                  patch: Partial<QualityGuardGlobalConfig>
+                ) => {
+                  setConfig((prev) => ({
+                    ...prev,
+                    qualityGuardConfig: {
+                      ...DEFAULT_QUALITY_GUARD_CONFIG,
+                      ...(prev.qualityGuardConfig || {}),
+                      ...patch,
+                    },
+                  }));
+                };
+
                 const handleAddGlobalSpPreset = (e: React.FormEvent) => {
                   e.preventDefault();
                   const cleanLabel = newGlobalSpForm.label.trim();
                   const cleanBadge = newGlobalSpForm.sellingPointBadge.trim();
                   if (!cleanLabel || !cleanBadge) {
-                    showToast('请填写方案名称与核心卖点胶囊文案', 'error');
+                    showToast('请填写方案名称与核心卖点文案', 'error');
                     return;
                   }
                   const created: SkuSellingPointPreset = {
@@ -10055,10 +10446,6 @@ export default function App() {
                     sellingPointBadge: cleanBadge,
                     packageSpecNote:
                       newGlobalSpForm.packageSpecNote.trim() || undefined,
-                    titlePrefix:
-                      newGlobalSpForm.titlePrefix.trim() || undefined,
-                    subtitleText:
-                      newGlobalSpForm.subtitleText.trim() || undefined,
                   };
                   const nextList = [...activeSpPresets, created];
                   syncGlobalSellingPointPresets(nextList);
@@ -10070,19 +10457,82 @@ export default function App() {
                     subtitleText: '',
                   });
                   showToast(
-                    `已新增兜底卖点方案「${cleanLabel}」并同步至 SKU 工作台`,
+                    `已新增通用卖点方案「${cleanLabel}」，主图与详情页双工作台可一键调用`,
+                    'success'
+                  );
+                };
+
+                const handleApplyPresetToMainStudio = (
+                  preset: SkuSellingPointPreset
+                ) => {
+                  const combined = [
+                    preset.sellingPointBadge.trim(),
+                    preset.packageSpecNote?.trim(),
+                  ]
+                    .filter(Boolean)
+                    .join(' ｜ ');
+                  updateSkuBatchConfig({
+                    referenceInfoText: combined,
+                  });
+                  setSkuTasks((prev) =>
+                    prev.map((st) => {
+                      const nextSpecNote =
+                        preset.packageSpecNote || st.packageSpecNote || '';
+                      const synced = syncSellingPointsIntoTypographyAndPrompt(
+                        st.typographyPlan,
+                        st.visualPrompt,
+                        st.sellingPointBadge,
+                        preset.sellingPointBadge,
+                        st.packageSpecNote || '',
+                        nextSpecNote
+                      );
+                      return {
+                        ...st,
+                        sellingPointBadge: preset.sellingPointBadge,
+                        packageSpecNote: nextSpecNote,
+                        typographyPlan: synced.typographyPlan,
+                        visualPrompt: synced.visualPrompt,
+                      };
+                    })
+                  );
+                  showToast(
+                    `已将「${preset.label}」应用至 ① 主图/SKU工作台`,
+                    'success'
+                  );
+                };
+
+                const handleApplyPresetToDetailStudio = (
+                  preset: SkuSellingPointPreset
+                ) => {
+                  const lineToInsert = [
+                    preset.sellingPointBadge.trim(),
+                    preset.packageSpecNote?.trim(),
+                  ]
+                    .filter(Boolean)
+                    .join('；');
+                  setProductInfoText((prev) => {
+                    const cleanPrev = prev.trim();
+                    if (!cleanPrev) return lineToInsert;
+                    if (cleanPrev.includes(preset.sellingPointBadge.trim())) {
+                      return cleanPrev;
+                    }
+                    return `${cleanPrev}\n${lineToInsert}`;
+                  });
+                  showToast(
+                    `已将「${preset.label}」填入 ② 详情页工作台卖点栏`,
                     'success'
                   );
                 };
 
                 const handleExportGlobalSettingsJson = () => {
                   const payload = {
-                    version: 'ecom_studio_global_settings_v1',
+                    version: 'ecom_studio_global_settings_v2',
                     exportedAt: new Date().toISOString(),
                     config: {
                       ...config,
                       defaultSellingPointPresets: activeSpPresets,
                       skuDefaultFallback: fb,
+                      qualityGuardConfig: qg,
                     },
                   };
                   const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -10119,6 +10569,7 @@ export default function App() {
                       ? importedCfg.defaultSellingPointPresets
                       : undefined;
                     const importedFb = importedCfg.skuDefaultFallback;
+                    const importedQg = importedCfg.qualityGuardConfig;
 
                     setConfig((prev) => ({
                       ...prev,
@@ -10128,6 +10579,9 @@ export default function App() {
                       skuDefaultFallback: importedFb
                         ? { ...DEFAULT_SKU_FALLBACK_CONFIG, ...importedFb }
                         : prev.skuDefaultFallback,
+                      qualityGuardConfig: importedQg
+                        ? { ...DEFAULT_QUALITY_GUARD_CONFIG, ...importedQg }
+                        : prev.qualityGuardConfig,
                       ossConfig: mergeOssConfigPreservingCredentials(
                         prev.ossConfig,
                         importedCfg.ossConfig
@@ -10161,14 +10615,14 @@ export default function App() {
                         <div className="flex items-center gap-2.5">
                           <span className="px-2.5 py-0.5 text-[11px] font-bold bg-emerald-500 text-slate-950 rounded-md flex items-center gap-1">
                             <ShieldCheck className="w-3.5 h-3.5" />
-                            <span>双向同步 · 重置防丢保护</span>
+                            <span>双工作台互通 · 重置防丢保护</span>
                           </span>
                           <h4 className="text-sm font-bold">
-                            SKU 常用卖点方案库 & 工作台重置兜底中心
+                            双工作台卖点预置库、真实默认参数兜底 & 生图防变形护栏
                           </h4>
                         </div>
                         <p className="text-xs text-slate-300 leading-relaxed">
-                          无论在此处还是在「② SKU图工作台」左侧修改卖点方案，均会自动双向同步保存；点击顶栏「重置」时仅清空临时画布，100% 保留以下兜底预置。
+                          「常用卖点方案库」同时服务 ① 主图/SKU工作台 与 ② 详情页工作台；点击顶栏「重置」时仅清空临时画布，100% 保留以下兜底参数与防变形护栏。
                         </p>
                       </div>
 
@@ -10196,27 +10650,27 @@ export default function App() {
                           className="px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl flex items-center gap-1.5 cursor-pointer"
                         >
                           <Download className="w-3.5 h-3.5" />
-                          <span>导出全局设置与卖点备份 (.json)</span>
+                          <span>导出全局设置备份 (.json)</span>
                         </button>
                       </div>
                     </div>
 
-                    {/* SECTION 1: SKU Selling Point Presets Library */}
+                    {/* SECTION 1: Dual-Workbench Selling Point Presets Library */}
                     <div className="p-6 bg-white border border-slate-200 rounded-2xl space-y-5 shadow-2xs">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                             <Palette className="w-4 h-4 text-blue-600" />
                             <span>
-                              一、SKU 常用卖点预置方案库（共{' '}
+                              一、双工作台通用卖点预置方案库（共{' '}
                               <span className="font-mono-tabular text-blue-600">
                                 {activeSpPresets.length}
                               </span>{' '}
-                              套 · 重置后默认保留）
+                              套 · ① 主图工作台 & ② 详情页工作台共享）
                             </span>
                           </h4>
                           <p className="text-xs text-slate-500 mt-1">
-                            可直接修改任意方案的名称、卖点胶囊文案（建议用「｜」分隔）与底部小字说明，实时同步至 SKU 工作台左侧快捷栏
+                            直接编辑方案名称、核心卖点文案（建议用「｜」分隔）与包装配件说明；支持在此一键推入主图或详情页工作台
                           </p>
                         </div>
 
@@ -10234,16 +10688,16 @@ export default function App() {
                         </button>
                       </div>
 
-                      {/* Add New Selling Point Preset Form */}
+                      {/* Add New Selling Point Preset Form (Clean single-row 12-col grid without legacy prefix clutter) */}
                       <form
                         onSubmit={handleAddGlobalSpPreset}
-                        className="p-5 bg-slate-50/80 border border-blue-200/80 rounded-xl space-y-3.5"
+                        className="p-4 bg-slate-50/80 border border-blue-200/80 rounded-xl space-y-3"
                       >
                         <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                           <Plus className="w-3.5 h-3.5 text-blue-600" />
-                          <span>新增常用卖点预置方案</span>
+                          <span>新增双工作台通用卖点方案</span>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5">
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
                           <input
                             type="text"
                             value={newGlobalSpForm.label}
@@ -10253,7 +10707,7 @@ export default function App() {
                                 label: e.target.value,
                               }))
                             }
-                            placeholder="方案名称 (如: 🔥 爆款主推标配)"
+                            placeholder="方案名称 (如: 🎧 声学高配版)"
                             className="md:col-span-3 px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
                           />
                           <input
@@ -10265,7 +10719,7 @@ export default function App() {
                                 sellingPointBadge: e.target.value,
                               }))
                             }
-                            placeholder="核心卖点胶囊文案 (如: 顺丰包邮 ｜ 30天免费试戴 ｜ 终身质保)"
+                            placeholder="核心卖点文案 (如: 蓝牙6.0 ｜ 13mm动圈 ｜ 36h超长续航)"
                             className="md:col-span-5 px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
                           />
                           <input
@@ -10277,54 +10731,28 @@ export default function App() {
                                 packageSpecNote: e.target.value,
                               }))
                             }
-                            placeholder="底部包装/配件小字 (可选)"
-                            className="md:col-span-4 px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
-                          />
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
-                          <input
-                            type="text"
-                            value={newGlobalSpForm.titlePrefix}
-                            onChange={(e) =>
-                              setNewGlobalSpForm((prev) => ({
-                                ...prev,
-                                titlePrefix: e.target.value,
-                              }))
-                            }
-                            placeholder="绑定主标题前缀 (可选，如: TWS328-C)"
-                            className="md:col-span-5 px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
-                          />
-                          <input
-                            type="text"
-                            value={newGlobalSpForm.subtitleText}
-                            onChange={(e) =>
-                              setNewGlobalSpForm((prev) => ({
-                                ...prev,
-                                subtitleText: e.target.value,
-                              }))
-                            }
-                            placeholder="绑定副标题固定文案 (可选，如: 官方旗舰限定款)"
-                            className="md:col-span-5 px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
+                            placeholder="包装/配件补充说明 (可选)"
+                            className="md:col-span-2 px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
                           />
                           <button
                             type="submit"
                             className="md:col-span-2 py-2 px-3.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
                           >
-                            + 添加至预置库
+                            + 添加至方案库
                           </button>
                         </div>
                       </form>
 
                       {/* Editable Presets List */}
-                      <div className="space-y-3 max-h-[440px] overflow-y-auto pr-1">
+                      <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
                         {activeSpPresets.map((preset, idx) => (
                           <div
                             key={preset.id}
-                            className="p-4 bg-slate-50/60 border border-slate-200/90 rounded-xl space-y-3 hover:border-slate-300 transition-colors"
+                            className="p-3.5 bg-slate-50/60 border border-slate-200/90 rounded-xl hover:border-slate-300 transition-colors"
                           >
-                            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-                              <div className="md:col-span-3 flex items-center gap-2">
-                                <span className="text-xs font-mono-tabular font-bold text-slate-400 w-6 shrink-0">
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-center">
+                              <div className="md:col-span-2 flex items-center gap-2">
+                                <span className="text-xs font-mono-tabular font-bold text-slate-400 w-5 shrink-0">
                                   #{idx + 1}
                                 </span>
                                 <input
@@ -10340,12 +10768,12 @@ export default function App() {
                                       )
                                     );
                                   }}
-                                  className="w-full px-3 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
+                                  className="w-full px-2.5 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
                                   placeholder="方案名称"
                                 />
                               </div>
 
-                              <div className="md:col-span-5">
+                              <div className="md:col-span-4">
                                 <input
                                   type="text"
                                   value={preset.sellingPointBadge}
@@ -10360,7 +10788,7 @@ export default function App() {
                                     );
                                   }}
                                   className="w-full px-3 py-1.5 text-xs text-slate-800 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
-                                  placeholder="核心卖点胶囊文案"
+                                  placeholder="核心卖点文案（用｜分隔）"
                                 />
                               </div>
 
@@ -10379,11 +10807,31 @@ export default function App() {
                                     );
                                   }}
                                   className="w-full px-3 py-1.5 text-xs text-slate-600 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
-                                  placeholder="底部包装说明小字 (可选)"
+                                  placeholder="包装/规格补充说明 (可选)"
                                 />
                               </div>
 
-                              <div className="md:col-span-1 flex items-center justify-end gap-1">
+                              <div className="md:col-span-3 flex items-center justify-end gap-1 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleApplyPresetToMainStudio(preset)
+                                  }
+                                  title="将此方案应用至 ① 主图/SKU工作台"
+                                  className="px-2 py-1 text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-md cursor-pointer"
+                                >
+                                  填入①主图
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleApplyPresetToDetailStudio(preset)
+                                  }
+                                  title="将此方案追加至 ② 详情页工作台产品卖点栏"
+                                  className="px-2 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md cursor-pointer"
+                                >
+                                  填入②详情
+                                </button>
                                 <button
                                   type="button"
                                   disabled={idx === 0}
@@ -10446,200 +10894,221 @@ export default function App() {
                                 </button>
                               </div>
                             </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center pl-8">
-                              <div className="md:col-span-6">
-                                <input
-                                  type="text"
-                                  value={preset.titlePrefix || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    syncGlobalSellingPointPresets(
-                                      activeSpPresets.map((p) =>
-                                        p.id === preset.id
-                                          ? {
-                                              ...p,
-                                              titlePrefix: val || undefined,
-                                            }
-                                          : p
-                                      )
-                                    );
-                                  }}
-                                  className="w-full px-3 py-1.5 text-xs font-mono-tabular text-slate-600 bg-white border border-slate-200/90 rounded-lg focus:outline-none focus:border-blue-600"
-                                  placeholder="绑定主标题前缀 (可选，如: TWS328-C)"
-                                />
-                              </div>
-                              <div className="md:col-span-6">
-                                <input
-                                  type="text"
-                                  value={preset.subtitleText || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    syncGlobalSellingPointPresets(
-                                      activeSpPresets.map((p) =>
-                                        p.id === preset.id
-                                          ? {
-                                              ...p,
-                                              subtitleText: val || undefined,
-                                            }
-                                          : p
-                                      )
-                                    );
-                                  }}
-                                  className="w-full px-3 py-1.5 text-xs text-slate-600 bg-white border border-slate-200/90 rounded-lg focus:outline-none focus:border-blue-600"
-                                  placeholder="绑定副标题固定文案 (可选，如: 官方正品限定款)"
-                                />
-                              </div>
-                            </div>
                           </div>
                         ))}
                       </div>
                     </div>
 
-                    {/* SECTION 2 & SECTION 3: SKU Default Formula Fallback + Default Output Specs */}
+                    {/* SECTION 2: Dual-Workbench Real Default Fallback Parameters */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                      {/* Section 2: SKU Default Formula & Diff Mode Fallback */}
+                      {/* Left: ① Main / SKU Studio Default Fallbacks */}
                       <div className="p-6 bg-white border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-sm font-bold text-slate-900">
-                            二、SKU 默认标题公式与差异模式兜底
+                            二、① 主图/SKU工作台默认参数兜底
                           </span>
                           <button
                             type="button"
                             onClick={() => {
+                              const resolvedReplicaLang =
+                                fb.replicaLanguage || 'zh';
+                              const resolvedTextMode: TextRenderMode =
+                                resolvedReplicaLang === 'none'
+                                  ? 'without_text'
+                                  : 'with_text';
                               updateSkuBatchConfig({
-                                skuDiffMode: fb.skuDiffMode,
-                                titlePrefix: fb.titlePrefix,
-                                subtitleText: fb.subtitleText,
-                                swapTitleOrder: fb.swapTitleOrder,
-                                titleIndexMode: fb.titleIndexMode,
+                                replicaFidelity:
+                                  fb.replicaFidelity || 'style_reference',
+                                styleLinkageMode:
+                                  fb.styleLinkageMode || 'print_4d',
+                                consistentOutputStyle:
+                                  (fb.styleLinkageMode || 'print_4d') !==
+                                  'lock_scene',
+                                replicaLanguage: resolvedReplicaLang,
+                                textMode: resolvedTextMode,
                                 defaultAspectRatio: fb.defaultAspectRatio,
                                 defaultImageSize: fb.defaultImageSize,
-                                textMode: fb.textMode,
                               });
+                              setSkuTasks((prev) =>
+                                prev.map((st) => ({
+                                  ...st,
+                                  replicaFidelity:
+                                    fb.replicaFidelity || 'style_reference',
+                                  styleLinkageMode:
+                                    fb.styleLinkageMode || 'print_4d',
+                                  consistentOutputStyle:
+                                    (fb.styleLinkageMode || 'print_4d') !==
+                                    'lock_scene',
+                                  replicaLanguage: resolvedReplicaLang,
+                                  textMode: resolvedTextMode,
+                                  aspectRatio: fb.defaultAspectRatio,
+                                  imageSize: fb.defaultImageSize,
+                                }))
+                              );
                               showToast(
-                                '已将默认标题公式与规格立即应用到当前 SKU 工作台',
+                                '已将主图工作台默认复刻参数与画幅规格同步至当前 ① 主图工作台',
                                 'success'
                               );
                             }}
-                            className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
+                            className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer shrink-0"
                           >
-                            立即应用至当前工作台 →
+                            立即同步至①主图工作台 →
                           </button>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                           <div>
                             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                              默认 SKU 差异对比模式
+                              默认复刻模式 (重置后默认档位)
                             </label>
                             <select
-                              value={fb.skuDiffMode}
+                              value={fb.replicaFidelity || 'style_reference'}
                               onChange={(e) =>
                                 updateSkuFallbackPatch({
-                                  skuDiffMode: e.target
-                                    .value as SkuDifferenceMode,
+                                  replicaFidelity: e.target
+                                    .value as ReplicaFidelity,
                                 })
                               }
                               className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-600"
                             >
-                              <option value="pattern_color">
-                                款式 / 图案 / 花色区别 (锁版式换花色)
+                              <option value="style_reference">
+                                参考风格 (创意重排 · 防背景克隆推荐)
                               </option>
-                              <option value="model_spec">
-                                外观 / 机型 / 配置区别 (突出升级点)
-                              </option>
-                              <option value="package_bundle">
-                                包装 / 礼盒 / 配件区别 (全家福陈列)
+                              <option value="high_replica">
+                                高度复刻 (1:1 锁死构图与版式)
                               </option>
                             </select>
                           </div>
 
                           <div>
                             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                              默认编号生成规则
+                              默认场景与壳面印花联动策略
                             </label>
                             <select
-                              value={fb.titleIndexMode}
+                              value={fb.styleLinkageMode || 'print_4d'}
                               onChange={(e) =>
                                 updateSkuFallbackPatch({
-                                  titleIndexMode: e.target
-                                    .value as SkuTitleIndexMode,
+                                  styleLinkageMode: e.target
+                                    .value as StyleLinkageMode,
                                 })
                               }
                               className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-600"
                             >
-                              <option value="seq_1">
-                                前缀 + 自动递增序号 (1, 2, 3...)
+                              <option value="print_4d">
+                                🎨 印花4维深度联动 (色板+底座+微缩道具+浅色卡)
                               </option>
-                              <option value="file_name">
-                                前缀 + 产品图文件名/标签
+                              <option value="harmonize_color">
+                                ✨ 同色系顺应 (顺应产品主色调协调背景)
                               </option>
-                              <option value="custom_lines">
-                                按行自定义输入
+                              <option value="lock_scene">
+                                🔒 锁死原场景 (保留参考图原有背景色温)
                               </option>
                             </select>
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                           <div>
                             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                              默认递增编码前缀 (重置后自动填入)
+                              默认画面海报语言
                             </label>
-                            <input
-                              type="text"
-                              value={fb.titlePrefix}
-                              onChange={(e) =>
+                            <select
+                              value={fb.replicaLanguage || 'zh'}
+                              onChange={(e) => {
+                                const lang = e.target.value as ReplicaLanguage;
                                 updateSkuFallbackPatch({
-                                  titlePrefix: e.target.value,
-                                })
-                              }
-                              placeholder="如: TWS328-C 或留空"
-                              className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-600"
-                            />
+                                  replicaLanguage: lang,
+                                  textMode:
+                                    lang === 'none'
+                                      ? 'without_text'
+                                      : 'with_text',
+                                });
+                              }}
+                              className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-600"
+                            >
+                              <option value="zh">中文海报 (含主副标题)</option>
+                              <option value="en">英文跨境海报 (English)</option>
+                              <option value="none">纯产品底图 (无文字)</option>
+                            </select>
                           </div>
 
                           <div>
                             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                              默认全套固定副标题文案
+                              主图/SKU默认画幅比例
                             </label>
-                            <input
-                              type="text"
-                              value={fb.subtitleText}
+                            <select
+                              value={fb.defaultAspectRatio}
                               onChange={(e) =>
                                 updateSkuFallbackPatch({
-                                  subtitleText: e.target.value,
+                                  defaultAspectRatio: e.target
+                                    .value as AspectRatioOption,
                                 })
                               }
-                              placeholder="如: 官方正品限定款 或留空"
-                              className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-600"
-                            />
+                              className="w-full px-3 py-2 text-xs font-mono-tabular bg-slate-50 border border-slate-200 rounded-lg focus:bg-white"
+                            >
+                              <option value="1:1">1:1 (标准方图)</option>
+                              <option value="3:4">3:4 (竖版主图)</option>
+                              <option value="4:3">4:3 (横版规格图)</option>
+                              <option value="9:16">9:16 (全屏竖版)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                              主图默认输出分辨率
+                            </label>
+                            <select
+                              value={fb.defaultImageSize}
+                              onChange={(e) => {
+                                const sz = e.target.value as ImageSizeOption;
+                                updateSkuFallbackPatch({
+                                  defaultImageSize: sz,
+                                });
+                              }}
+                              className="w-full px-3 py-2 text-xs font-mono-tabular bg-slate-50 border border-slate-200 rounded-lg focus:bg-white"
+                            >
+                              {IMAGE_SIZE_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.value}
+                                </option>
+                              ))}
+                            </select>
                           </div>
                         </div>
 
-                        <label className="flex items-center gap-2.5 p-3 bg-slate-50 border border-slate-200/80 rounded-xl cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(fb.swapTitleOrder)}
-                            onChange={(e) =>
-                              updateSkuFallbackPatch({
-                                swapTitleOrder: e.target.checked,
-                              })
-                            }
-                            className="w-4 h-4 rounded border-slate-300 text-blue-600"
-                          />
-                          <span className="text-xs text-slate-700">
-                            默认调换主副标题顺序（将固定文案作为第1行大字主标题，递增编码作为第2行副标题）
-                          </span>
-                        </label>
+                        <p className="text-[11px] text-slate-500 leading-relaxed pt-1">
+                          说明：主图/SKU工作台卡片标题现已直接取自产品图语义名称（如「C9小猫钓鱼印花」或策划主标题），无需配置旧版递增编码前缀。
+                        </p>
                       </div>
 
-                      {/* Section 3: Default Aspect Ratios, Resolution & Reset Behavior */}
+                      {/* Right: ② Detail Studio Default Fallbacks & Reset Protection */}
                       <div className="p-6 bg-white border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
-                        <span className="text-sm font-bold text-slate-900 block">
-                          三、默认画幅规格与重置保护策略
-                        </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-bold text-slate-900">
+                            三、② 详情页工作台默认参数与重置保护
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTasks((prev) =>
+                                prev.map((t) => ({
+                                  ...t,
+                                  aspectRatio:
+                                    config.requirements.detailAspectRatio,
+                                  imageSize: config.defaultImageSize,
+                                  textMode: config.requirements.textMode,
+                                }))
+                              );
+                              showToast(
+                                `已将详情页默认比例 (${config.requirements.detailAspectRatio}) 与分辨率 (${config.defaultImageSize}) 同步至当前详情页所有分屏`,
+                                'success'
+                              );
+                            }}
+                            className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer shrink-0"
+                          >
+                            立即同步至②详情页工作台 →
+                          </button>
+                        </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                           <div>
@@ -10662,46 +11131,48 @@ export default function App() {
                               }}
                               className="w-full px-3 py-2 text-xs font-mono-tabular bg-slate-50 border border-slate-200 rounded-lg focus:bg-white"
                             >
-                              {ASPECT_RATIO_OPTIONS.map((opt) => (
-                                <option key={opt.value} value={opt.value}>
-                                  {opt.value}
-                                </option>
-                              ))}
+                              <option value="9:16">9:16 (手机全屏竖版)</option>
+                              <option value="3:4">3:4 (经典电商竖版)</option>
+                              <option value="1:1">1:1 (方形分屏)</option>
+                              <option value="4:3">4:3 (横版分屏)</option>
                             </select>
                           </div>
 
                           <div>
                             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                              SKU图默认比例
+                              详情页默认文字模式
                             </label>
                             <select
-                              value={fb.defaultAspectRatio}
-                              onChange={(e) =>
-                                updateSkuFallbackPatch({
-                                  defaultAspectRatio: e.target
-                                    .value as AspectRatioOption,
-                                })
-                              }
-                              className="w-full px-3 py-2 text-xs font-mono-tabular bg-slate-50 border border-slate-200 rounded-lg focus:bg-white"
+                              value={config.requirements.textMode}
+                              onChange={(e) => {
+                                const tm = e.target.value as TextRenderMode;
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  requirements: {
+                                    ...prev.requirements,
+                                    textMode: tm,
+                                  },
+                                }));
+                              }}
+                              className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white"
                             >
-                              <option value="1:1">1:1 (标准方图)</option>
-                              <option value="3:4">3:4 (竖版规格图)</option>
-                              <option value="4:3">4:3 (横版规格图)</option>
-                              <option value="9:16">9:16 (全屏竖版)</option>
+                              <option value="with_text">
+                                含屏内分层标题与卖点卡
+                              </option>
+                              <option value="without_text">
+                                纯视觉底图 (不含文字)
+                              </option>
                             </select>
                           </div>
 
                           <div>
                             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                              默认输出分辨率
+                              详情页默认输出分辨率
                             </label>
                             <select
-                              value={fb.defaultImageSize}
+                              value={config.defaultImageSize}
                               onChange={(e) => {
                                 const sz = e.target.value as ImageSizeOption;
-                                updateSkuFallbackPatch({
-                                  defaultImageSize: sz,
-                                });
                                 setConfig((prev) => ({
                                   ...prev,
                                   defaultImageSize: sz,
@@ -10749,10 +11220,175 @@ export default function App() {
                               className="w-4 h-4 rounded border-slate-300 text-blue-600"
                             />
                             <span className="text-xs font-medium text-slate-800">
-                              重置工作台时默认勾选「保留已填写的企划文案与标题前缀」
+                              重置工作台时默认勾选「保留已填写的商品卖点与整页视觉规范文案」
                             </span>
                           </label>
                         </div>
+                      </div>
+                    </div>
+
+                    {/* SECTION 3: Global Image Quality Guard & Anti-Deformation Engine */}
+                    <div className="p-6 bg-white border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                            <span>
+                              四、生图质量与防变形全局护栏（Quality Guard Engine · 双工作台实时生效）
+                            </span>
+                          </h4>
+                          <p className="text-xs text-slate-500 mt-1">
+                            从源头拦截「单屏乱塞多角度导致主体变形、异款正面花色混绑、画面印出 #Prod-1 乱码、把“胶囊”画成3D药丸」等常见翻车问题
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateQualityGuardPatch(
+                              DEFAULT_QUALITY_GUARD_CONFIG
+                            );
+                            showToast(
+                              '已恢复推荐的防变形护栏开关与默认全局负向禁用词',
+                              'info'
+                            );
+                          }}
+                          className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer"
+                        >
+                          恢复默认防变形护栏
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                        <label className="flex items-start gap-3 p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={qg.autoSanitizePromptCodes !== false}
+                            onChange={(e) =>
+                              updateQualityGuardPatch({
+                                autoSanitizePromptCodes: e.target.checked,
+                              })
+                            }
+                            className="mt-0.5 w-4 h-4 rounded border-slate-300 text-blue-600"
+                          />
+                          <div className="text-xs">
+                            <div className="font-bold text-slate-800">
+                              自动净网过滤 #Prod/#Case 内部编号与“胶囊”药丸词
+                            </div>
+                            <p className="text-slate-500 mt-0.5 leading-relaxed">
+                              生图前自动将提示词中的 #Prod-2 替换为自然视觉语义，并将“卖点胶囊”替换为“浅色圆角信息卡”，杜绝画面印出编号文字。
+                            </p>
+                          </div>
+                        </label>
+
+                        <label className="flex items-start gap-3 p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={qg.strictSingleSkuProdCap !== false}
+                            onChange={(e) =>
+                              updateQualityGuardPatch({
+                                strictSingleSkuProdCap: e.target.checked,
+                              })
+                            }
+                            className="mt-0.5 w-4 h-4 rounded border-slate-300 text-blue-600"
+                          />
+                          <div className="text-xs">
+                            <div className="font-bold text-slate-800">
+                              单品画面严格限制 1~2 张互补视角 & 拦截异款正面花色混绑
+                            </div>
+                            <p className="text-slate-500 mt-0.5 leading-relaxed">
+                              非多款全家福合集屏自动限制传入 1~2 张互补角度（正面主图永远作为 Slot #1 权威锚点），防止多张不同花色正面图相互打架。
+                            </p>
+                          </div>
+                        </label>
+
+                        <label className="flex items-start gap-3 p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={qg.enforceLightRoundedCards !== false}
+                            onChange={(e) =>
+                              updateQualityGuardPatch({
+                                enforceLightRoundedCards: e.target.checked,
+                              })
+                            }
+                            className="mt-0.5 w-4 h-4 rounded border-slate-300 text-blue-600"
+                          />
+                          <div className="text-xs">
+                            <div className="font-bold text-slate-800">
+                              强制浅色半透明圆角信息卡（严禁生硬黑框与 3D 医药胶囊）
+                            </div>
+                            <p className="text-slate-500 mt-0.5 leading-relaxed">
+                              自动注入浅色毛玻璃圆角矩形 UI 规范，严禁生图模型生成压抑的深棕/纯黑底框或立体红蓝药丸颗粒。
+                            </p>
+                          </div>
+                        </label>
+
+                        <label className="flex items-start gap-3 p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={qg.lockRefineHighWeightAnchor !== false}
+                            onChange={(e) =>
+                              updateQualityGuardPatch({
+                                lockRefineHighWeightAnchor: e.target.checked,
+                              })
+                            }
+                            className="mt-0.5 w-4 h-4 rounded border-slate-300 text-blue-600"
+                          />
+                          <div className="text-xs">
+                            <div className="font-bold text-slate-800">
+                              锁图微调模式强制 95% 构图权重锚定并自动屏蔽竞品图
+                            </div>
+                            <p className="text-slate-500 mt-0.5 leading-relaxed">
+                              开启卡片「锁图微调」时，将当前结果图置顶为第 1 张参考图并剥离竞品 #Case 图，仅执行局部指令精修，不重绘整张背景。
+                            </p>
+                          </div>
+                        </label>
+                      </div>
+
+                      <div className="space-y-2 pt-1">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <label className="text-xs font-bold text-slate-800">
+                            全局自定义负向禁用词（自动注入 ① 主图工作台 与 ② 详情页工作台每次生图指令）
+                          </label>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {[
+                              '严禁出现有线耳机线',
+                              '严禁改变充电仓指示灯孔位',
+                              '严禁同一展台并排出现两个重复充电仓',
+                              '严禁绘制3D医药胶囊颗粒与深棕黑框',
+                              '严禁印出#Prod/#Case内部编号',
+                            ].map((tag) => (
+                              <button
+                                key={tag}
+                                type="button"
+                                onClick={() => {
+                                  const curr = (
+                                    qg.customNegativePrompt || ''
+                                  ).trim();
+                                  if (curr.includes(tag)) return;
+                                  updateQualityGuardPatch({
+                                    customNegativePrompt: curr
+                                      ? `${curr}、${tag}`
+                                      : tag,
+                                  });
+                                }}
+                                className="px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200/80 rounded-md cursor-pointer"
+                              >
+                                + {tag}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <textarea
+                          rows={2}
+                          value={qg.customNegativePrompt || ''}
+                          onChange={(e) =>
+                            updateQualityGuardPatch({
+                              customNegativePrompt: e.target.value,
+                            })
+                          }
+                          placeholder="输入全局禁止在生图画面中出现的元素（用顿号或逗号分隔），留空则不额外追加..."
+                          className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:border-blue-600 text-slate-800 leading-relaxed"
+                        />
                       </div>
                     </div>
                   </div>
@@ -10807,11 +11443,15 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5">
                       {config.channels.map((ch) => {
                         const isSelected = ch.id === config.activeChannelId;
-                        const protoBadge =
-                          ch.protocol === 'openai-compatible'
+                        const isCodexChannel =
+                          ch.mode === 'codex_cli' ||
+                          ch.protocol === 'codex-cli';
+                        const protoBadge = isCodexChannel
+                          ? '本地 Codex CLI 桥接'
+                          : ch.protocol === 'openai-compatible'
                             ? 'OpenAI /v1 协议'
                             : ch.protocol === 'gemini-native'
                               ? 'Gemini v1beta'
@@ -10825,6 +11465,9 @@ export default function App() {
                                 ...prev,
                                 activeChannelId: ch.id,
                               }));
+                              if (isCodexChannel) {
+                                void handleProbeCodexCliStatus(true);
+                              }
                             }}
                             className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-3 ${
                               isSelected
@@ -10837,7 +11480,9 @@ export default function App() {
                                 {ch.name}
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
-                                {ch.mode === 'custom_gateway' &&
+                                {(ch.mode === 'custom_gateway' ||
+                                  (isCodexChannel &&
+                                    ch.id !== 'local-codex-cli')) &&
                                   config.channels.length > 2 && (
                                     <button
                                       type="button"
@@ -10866,26 +11511,40 @@ export default function App() {
                             <div className="text-xs text-slate-500 font-mono-tabular truncate">
                               {ch.mode === 'official'
                                 ? '系统内置官方直连通道'
-                                : ch.baseUrl || '未填写端点'}
+                                : isCodexChannel
+                                  ? `${ch.cliCommand || 'codex'} exec + 内置模型桥接`
+                                  : ch.baseUrl || '未填写端点'}
                             </div>
 
                             <div className="flex items-center justify-between text-[11px] pt-2 border-t border-slate-200/60">
-                              <span className="px-2 py-0.5 rounded bg-slate-200/70 text-slate-700 font-medium">
+                              <span
+                                className={`px-2 py-0.5 rounded font-medium ${
+                                  isCodexChannel
+                                    ? 'bg-indigo-100 text-indigo-800 font-semibold'
+                                    : 'bg-slate-200/70 text-slate-700'
+                                }`}
+                              >
                                 {protoBadge}
                               </span>
                               <div className="flex items-center gap-1.5">
-                                {ch.mode === 'custom_gateway' && (
-                                  <span
-                                    className={`px-2 py-0.5 rounded font-mono-tabular ${
-                                      ch.apiKey && ch.apiKey.trim()
-                                        ? 'bg-emerald-100 text-emerald-800 font-semibold'
-                                        : 'bg-amber-100 text-amber-800'
-                                    }`}
-                                  >
-                                    {ch.apiKey && ch.apiKey.trim()
-                                      ? '已配密钥'
-                                      : '待填API Key'}
+                                {isCodexChannel ? (
+                                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold font-mono-tabular">
+                                    对话+生图就绪
                                   </span>
+                                ) : (
+                                  ch.mode === 'custom_gateway' && (
+                                    <span
+                                      className={`px-2 py-0.5 rounded font-mono-tabular ${
+                                        ch.apiKey && ch.apiKey.trim()
+                                          ? 'bg-emerald-100 text-emerald-800 font-semibold'
+                                          : 'bg-amber-100 text-amber-800'
+                                      }`}
+                                    >
+                                      {ch.apiKey && ch.apiKey.trim()
+                                        ? '已配密钥'
+                                        : '待填API Key'}
+                                    </span>
+                                  )
                                 )}
                                 <span className="text-slate-500 font-mono-tabular">
                                   并发 {ch.concurrency} 路
@@ -10896,6 +11555,250 @@ export default function App() {
                         );
                       })}
                     </div>
+
+                    {/* Active Local Codex CLI Channel Configuration & Built-in Model Bridge Panel */}
+                    {(activeChannel.mode === 'codex_cli' ||
+                      activeChannel.protocol === 'codex-cli') && (
+                      <div className="p-5 bg-indigo-50/40 border border-indigo-200/90 rounded-xl space-y-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="space-y-0.5">
+                            <div className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                              <span className="px-2 py-0.5 rounded bg-indigo-600 text-white text-[11px] font-mono-tabular">
+                                Codex CLI Bridge
+                              </span>
+                              <span>
+                                本地 Codex CLI 通道接入（支持调用本机 CLI 与内置模型进行多模态对话规划和高清生图）
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600">
+                              自动探测本机 <code className="font-mono-tabular bg-white px-1 py-0.5 rounded border border-slate-200">codex</code> 命令行与 <code className="font-mono-tabular bg-white px-1 py-0.5 rounded border border-slate-200">~/.codex/config.toml</code>，并无缝桥接内置策划模型（如 <code className="font-mono-tabular">gemini-4-argon</code> / <code className="font-mono-tabular">gemini-3.8-flash</code>）与生图模型（如 <code className="font-mono-tabular">gemini-nano-banana-2.1</code> / <code className="font-mono-tabular">gemini-3-pro-image</code>）。
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleProbeCodexCliStatus(false)}
+                            disabled={codexCliStatus.loading}
+                            className="px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 rounded-lg flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            {codexCliStatus.loading ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            )}
+                            <span>检测本地 Codex CLI 环境</span>
+                          </button>
+                        </div>
+
+                        {/* Status Inspector Badges */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <div className="p-3 bg-white border border-slate-200/80 rounded-xl space-y-1">
+                            <div className="text-[11px] text-slate-500 font-medium">
+                              1. 本机 Codex CLI 二进制状态
+                            </div>
+                            <div className="text-xs font-bold font-mono-tabular text-slate-800 flex items-center gap-1.5">
+                              <span
+                                className={`w-2 h-2 rounded-full ${
+                                  codexCliStatus.cliInstalled
+                                    ? 'bg-emerald-500'
+                                    : 'bg-blue-500'
+                                }`}
+                              />
+                              <span>
+                                {codexCliStatus.cliInstalled
+                                  ? `已安装 (${codexCliStatus.cliVersion || 'codex'})`
+                                  : '内置 Codex 桥接模式 (免装二进制直通)'}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {codexCliStatus.configPath
+                                ? `已读取配置: ${codexCliStatus.configPath}`
+                                : '未检出 ~/.codex 配置文件，自动使用内置通道凭证'}
+                            </div>
+                          </div>
+
+                          <div className="p-3 bg-white border border-slate-200/80 rounded-xl space-y-1">
+                            <div className="text-[11px] text-slate-500 font-medium">
+                              2. 内置对话/策划模型桥接 (Agent)
+                            </div>
+                            <div className="text-xs font-bold font-mono-tabular text-emerald-700 flex items-center gap-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">
+                                当前激活: {config.agentModel}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1 pt-0.5">
+                              {[
+                                'gemini-4-argon',
+                                'gemini-3.8-flash',
+                                'codex-mini-latest',
+                              ].map((mId) => (
+                                <button
+                                  key={mId}
+                                  type="button"
+                                  onClick={() => {
+                                    setConfig((prev) => ({
+                                      ...prev,
+                                      agentModel: mId,
+                                    }));
+                                    showToast(
+                                      `已切换 Codex 通道对话模型为 ${mId}`,
+                                      'success'
+                                    );
+                                  }}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono-tabular border cursor-pointer ${
+                                    config.agentModel === mId
+                                      ? 'bg-indigo-600 text-white border-indigo-600 font-semibold'
+                                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300'
+                                  }`}
+                                >
+                                  {mId}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="p-3 bg-white border border-slate-200/80 rounded-xl space-y-1">
+                            <div className="text-[11px] text-slate-500 font-medium">
+                              3. 内置视觉生图模型桥接 (Image)
+                            </div>
+                            <div className="text-xs font-bold font-mono-tabular text-emerald-700 flex items-center gap-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">
+                                当前激活: {config.imageModel}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1 pt-0.5">
+                              {[
+                                'gemini-nano-banana-2.1',
+                                'gemini-3-pro-image',
+                                'gemini-3.1-flash-lite-image',
+                              ].map((mId) => (
+                                <button
+                                  key={mId}
+                                  type="button"
+                                  onClick={() => {
+                                    setConfig((prev) => ({
+                                      ...prev,
+                                      imageModel: mId,
+                                    }));
+                                    showToast(
+                                      `已切换 Codex 通道生图模型为 ${mId}`,
+                                      'success'
+                                    );
+                                  }}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono-tabular border cursor-pointer ${
+                                    config.imageModel === mId
+                                      ? 'bg-emerald-600 text-white border-emerald-600 font-semibold'
+                                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-emerald-300'
+                                  }`}
+                                >
+                                  {mId}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* CLI Command & Optional Endpoint/Key Override */}
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                          <div className="md:col-span-3">
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                              本地 CLI 命令 / 可执行路径
+                            </label>
+                            <input
+                              type="text"
+                              value={activeChannel.cliCommand || 'codex'}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  channels: prev.channels.map((c) =>
+                                    c.id === activeChannel.id
+                                      ? { ...c, cliCommand: val }
+                                      : c
+                                  ),
+                                }));
+                              }}
+                              placeholder="codex 或 /usr/local/bin/codex"
+                              className="w-full px-3 py-2 text-xs font-mono-tabular bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-600"
+                            />
+                          </div>
+
+                          <div className="md:col-span-4">
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                              桥接地址或覆盖网关 URL（默认 codex://local）
+                            </label>
+                            <input
+                              type="text"
+                              value={activeChannel.baseUrl || 'codex://local'}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  channels: prev.channels.map((c) =>
+                                    c.id === activeChannel.id
+                                      ? { ...c, baseUrl: val }
+                                      : c
+                                  ),
+                                }));
+                              }}
+                              placeholder="codex://local 或自定义网关地址"
+                              className="w-full px-3 py-2 text-xs font-mono-tabular bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-600"
+                            />
+                          </div>
+
+                          <div className="md:col-span-3">
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                              可选覆盖 API Key（留空自动读取 ~/.codex 或内置密钥）
+                            </label>
+                            <input
+                              type={showChannelApiKey ? 'text' : 'password'}
+                              value={activeChannel.apiKey || ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  channels: prev.channels.map((c) =>
+                                    c.id === activeChannel.id
+                                      ? { ...c, apiKey: val }
+                                      : c
+                                  ),
+                                }));
+                              }}
+                              placeholder="留空则直接调用内置模型凭证"
+                              className="w-full px-3 py-2 text-xs font-mono-tabular bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-600"
+                            />
+                          </div>
+
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                              批量并发路数
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={6}
+                              value={activeChannel.concurrency}
+                              onChange={(e) => {
+                                const num = Math.max(
+                                  1,
+                                  Math.min(6, Number(e.target.value) || 2)
+                                );
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  channels: prev.channels.map((c) =>
+                                    c.id === activeChannel.id
+                                      ? { ...c, concurrency: num }
+                                      : c
+                                  ),
+                                }));
+                              }}
+                              className="w-full px-3 py-2 text-xs font-mono-tabular bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-600"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Active Custom Gateway Endpoint Editor & Real-time Broad Endpoint Preview */}
                     {activeChannel.mode === 'custom_gateway' && (
@@ -10951,6 +11854,9 @@ export default function App() {
                               </option>
                               <option value="openai-compatible">
                                 OpenAI 兼容协议 (/v1/chat & /v1/images)
+                              </option>
+                              <option value="codex-cli">
+                                本地 Codex CLI 桥接协议 (codex exec + 内置模型)
                               </option>
                             </select>
                           </div>
@@ -11101,7 +12007,7 @@ export default function App() {
                         className="p-5 bg-blue-50/40 border border-blue-200 rounded-xl space-y-3.5"
                       >
                         <div className="text-xs font-bold text-slate-800">
-                          添加新的自定义 API 网关通道（支持 OneAPI / NewAPI / OpenRouter / 自建反代，独立保存密钥）
+                          添加新的自定义 API 网关或本地 Codex CLI 通道（支持 OneAPI / NewAPI / OpenRouter / 本地 Codex CLI，独立保存密钥）
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
                           <input
@@ -11113,7 +12019,7 @@ export default function App() {
                                 name: e.target.value,
                               }))
                             }
-                            placeholder="通道名称 (如: 硅基流动/NewAPI)"
+                            placeholder="通道名称 (如: 本地Codex / NewAPI)"
                             className="sm:col-span-3 px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-lg"
                           />
                           <input
@@ -11125,7 +12031,7 @@ export default function App() {
                                 baseUrl: e.target.value,
                               }))
                             }
-                            placeholder="Base URL (如 https://your-gateway.com/v1)"
+                            placeholder="Base URL (如 codex://local 或 https://your-gateway.com/v1)"
                             className="sm:col-span-4 px-3.5 py-2 text-xs font-mono-tabular bg-white border border-slate-200 rounded-lg"
                           />
                           <input
@@ -11137,22 +12043,29 @@ export default function App() {
                                 apiKey: e.target.value,
                               }))
                             }
-                            placeholder="专属 API Key (sk-... / AIza...)"
+                            placeholder="专属 API Key (选填，Codex可留空)"
                             className="sm:col-span-3 px-3.5 py-2 text-xs font-mono-tabular bg-white border border-slate-200 rounded-lg"
                           />
                           <select
                             value={newChannelForm.protocol}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const nextProto = e.target
+                                .value as ApiProtocolMode;
                               setNewChannelForm((prev) => ({
                                 ...prev,
-                                protocol: e.target.value as ApiProtocolMode,
-                              }))
-                            }
+                                protocol: nextProto,
+                                baseUrl:
+                                  nextProto === 'codex-cli' && !prev.baseUrl
+                                    ? 'codex://local'
+                                    : prev.baseUrl,
+                              }));
+                            }}
                             className="sm:col-span-2 px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg"
                           >
                             <option value="auto">Auto 智能双栈</option>
                             <option value="openai-compatible">OpenAI /v1 兼容</option>
                             <option value="gemini-native">Gemini v1beta</option>
+                            <option value="codex-cli">本地 Codex CLI</option>
                           </select>
                         </div>
                         <div className="flex items-center justify-between gap-3">
@@ -11207,65 +12120,90 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Section B: Non-Fixed Dynamic Agent & Image Model Configuration */}
+                  {/* Section B: Integrated Dynamic Agent & Image Model Switcher + Inline Preset Pool */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     {/* Agent Model Card */}
                     <div className="p-6 bg-white border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <label className="text-sm font-bold text-slate-900">
                           二、对话编排与多模态识图 Agent 模型
                         </label>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleQuickSaveCurrentModelToPresets('agent')
-                          }
-                          className="px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer"
-                        >
-                          + 将当前模型存入常用池
-                        </button>
-                      </div>
-
-                      <div>
-                        <span className="block text-xs font-medium text-slate-600 mb-1.5">
-                          方式 1：从常用 Agent 模型池快速切换
-                        </span>
-                        <select
-                          value={
-                            agentPresetList.some(
-                              (m) => m.id === config.agentModel
-                            )
-                              ? config.agentModel
-                              : '__custom__'
-                          }
-                          onChange={(e) => {
-                            if (e.target.value !== '__custom__') {
-                              setConfig((prev) => ({
-                                ...prev,
-                                agentModel: e.target.value,
-                              }));
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleQuickSaveCurrentModelToPresets('agent')
                             }
-                          }}
-                          className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-600 font-medium text-slate-800"
-                        >
-                          {agentPresetList.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.label}
-                            </option>
-                          ))}
-                          {!agentPresetList.some(
-                            (m) => m.id === config.agentModel
-                          ) && (
-                            <option value="__custom__">
-                              自定义输入模型: {config.agentModel}
-                            </option>
-                          )}
-                        </select>
+                            className="px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer"
+                          >
+                            + 存入常用池
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setApiConfigTab('model_presets')}
+                            className="px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/70 rounded-lg cursor-pointer"
+                          >
+                            管理池 ({agentPresetList.length})
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Inline Quick Model Pool Chips (One-Click Switch & Remove on the same tab) */}
+                      <div className="space-y-1.5">
+                        <span className="block text-xs font-medium text-slate-600">
+                          常用 Agent 模型池（点击一键切换，点击 × 移除）：
+                        </span>
+                        <div className="flex flex-wrap gap-1.5 max-h-[112px] overflow-y-auto p-2 bg-slate-50 border border-slate-200/80 rounded-xl">
+                          {agentPresetList.map((m) => {
+                            const isCurrent = config.agentModel === m.id;
+                            return (
+                              <div
+                                key={m.id}
+                                className={`inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-lg text-xs border transition-all ${
+                                  isCurrent
+                                    ? 'bg-blue-600 text-white border-blue-600 font-bold shadow-2xs'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300'
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfig((prev) => ({
+                                      ...prev,
+                                      agentModel: m.id,
+                                    }))
+                                  }
+                                  className="font-mono-tabular cursor-pointer truncate max-w-[180px]"
+                                  title={m.label || m.id}
+                                >
+                                  {m.id}
+                                </button>
+                                {agentPresetList.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveModelPreset('agent', m.id);
+                                    }}
+                                    title="从常用池移除"
+                                    className={`p-0.5 rounded cursor-pointer ${
+                                      isCurrent
+                                        ? 'text-blue-200 hover:text-white hover:bg-blue-700'
+                                        : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                                    }`}
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
 
                       <div>
                         <span className="block text-xs font-medium text-slate-600 mb-1.5">
-                          方式 2：直接输入任意模型 ID（不固定模型，随网关自由切换）
+                          当前激活模型 ID（支持直接输入任意模型 ID，点击右上角「+ 存入常用池」即可保存）
                         </span>
                         <input
                           type="text"
@@ -11301,61 +12239,86 @@ export default function App() {
 
                     {/* Image Generation Model Card */}
                     <div className="p-6 bg-white border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <label className="text-sm font-bold text-slate-900">
                           三、视觉分屏生图模型
                         </label>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleQuickSaveCurrentModelToPresets('image')
-                          }
-                          className="px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer"
-                        >
-                          + 将当前模型存入常用池
-                        </button>
-                      </div>
-
-                      <div>
-                        <span className="block text-xs font-medium text-slate-600 mb-1.5">
-                          方式 1：从常用生图模型池快速切换
-                        </span>
-                        <select
-                          value={
-                            imagePresetList.some(
-                              (m) => m.id === config.imageModel
-                            )
-                              ? config.imageModel
-                              : '__custom__'
-                          }
-                          onChange={(e) => {
-                            if (e.target.value !== '__custom__') {
-                              setConfig((prev) => ({
-                                ...prev,
-                                imageModel: e.target.value,
-                              }));
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleQuickSaveCurrentModelToPresets('image')
                             }
-                          }}
-                          className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-600 font-medium text-slate-800"
-                        >
-                          {imagePresetList.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.label}
-                            </option>
-                          ))}
-                          {!imagePresetList.some(
-                            (m) => m.id === config.imageModel
-                          ) && (
-                            <option value="__custom__">
-                              自定义输入模型: {config.imageModel}
-                            </option>
-                          )}
-                        </select>
+                            className="px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer"
+                          >
+                            + 存入常用池
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setApiConfigTab('model_presets')}
+                            className="px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/70 rounded-lg cursor-pointer"
+                          >
+                            管理池 ({imagePresetList.length})
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Inline Quick Image Model Pool Chips */}
+                      <div className="space-y-1.5">
+                        <span className="block text-xs font-medium text-slate-600">
+                          常用生图模型池（点击一键切换，点击 × 移除）：
+                        </span>
+                        <div className="flex flex-wrap gap-1.5 max-h-[112px] overflow-y-auto p-2 bg-slate-50 border border-slate-200/80 rounded-xl">
+                          {imagePresetList.map((m) => {
+                            const isCurrent = config.imageModel === m.id;
+                            return (
+                              <div
+                                key={m.id}
+                                className={`inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-lg text-xs border transition-all ${
+                                  isCurrent
+                                    ? 'bg-blue-600 text-white border-blue-600 font-bold shadow-2xs'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300'
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfig((prev) => ({
+                                      ...prev,
+                                      imageModel: m.id,
+                                    }))
+                                  }
+                                  className="font-mono-tabular cursor-pointer truncate max-w-[180px]"
+                                  title={m.label || m.id}
+                                >
+                                  {m.id}
+                                </button>
+                                {imagePresetList.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveModelPreset('image', m.id);
+                                    }}
+                                    title="从常用池移除"
+                                    className={`p-0.5 rounded cursor-pointer ${
+                                      isCurrent
+                                        ? 'text-blue-200 hover:text-white hover:bg-blue-700'
+                                        : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                                    }`}
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
 
                       <div>
                         <span className="block text-xs font-medium text-slate-600 mb-1.5">
-                          方式 2：直接输入任意生图模型 ID（支持 Gemini / Flux / GPT-Image 等）
+                          当前激活生图模型 ID（支持 Gemini / Flux / GPT-Image / Seedream 等）
                         </span>
                         <input
                           type="text"
@@ -11373,7 +12336,7 @@ export default function App() {
 
                       <div className="flex items-center justify-between gap-3 pt-1">
                         <span className="text-xs text-slate-500 leading-relaxed">
-                          支持最多 10+ 张参考图与屏内中文直出；若主模型繁忙将自动无感降级至备用生图模型。
+                          支持多参考图与屏内中文直出；若主模型繁忙将自动无感降级至备用生图模型。
                         </span>
                         <button
                           type="button"
@@ -12297,87 +13260,255 @@ export default function App() {
                 </div>
               )}
 
-              {/* ================= TAB 4: WINDOWS DESKTOP (ELECTRON / TAURI) FOREGROUND VS BACKGROUND ARCHITECTURE ================= */}
-              {apiConfigTab === 'desktop_arch' && (
-                <div className="space-y-6">
-                  <div className="p-5 bg-slate-900 text-white rounded-2xl flex flex-wrap items-center justify-between gap-4">
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2.5">
-                        <span className="px-2.5 py-0.5 text-[11px] font-bold bg-emerald-500 text-slate-950 rounded-md">
-                          IPC 桥接层已就绪
-                        </span>
-                        <h4 className="text-sm font-bold">
-                          Windows 桌面端 (Electron / Tauri) 前后台职责分离架构
-                        </h4>
-                      </div>
-                      <p className="text-xs text-slate-300 leading-relaxed">
-                        前端所有网络与 AI 调用已全部收拢至{' '}
-                        <code className="text-amber-300 font-mono-tabular">
-                          src/services/studioBridge.ts
-                        </code>
-                        ，打包 Windows 桌面端时可直接通过 Electron{' '}
-                        <code className="text-amber-300 font-mono-tabular">
-                          ipcMain.handle
-                        </code>{' '}
-                        或 Tauri{' '}
-                        <code className="text-amber-300 font-mono-tabular">
-                          #[tauri::command]
-                        </code>{' '}
-                        无缝接管。
-                      </p>
-                    </div>
-                  </div>
+              {/* ================= TAB 4: LOCAL CACHE DIAGNOSTICS & WINDOWS DESKTOP ARCHITECTURE ================= */}
+              {apiConfigTab === 'desktop_arch' && (() => {
+                const allWorkspaceRefs = [
+                  ...referenceImages,
+                  ...skuReferenceImages,
+                ];
+                const cloudSyncedRefsWithBase64 = allWorkspaceRefs.filter(
+                  (r) =>
+                    Boolean(r.ossUrl && /^https?:\/\//i.test(r.ossUrl)) &&
+                    Boolean(r.base64Data && r.base64Data.length > 256)
+                );
+                const approxBase64Bytes = allWorkspaceRefs.reduce(
+                  (sum, r) => sum + (r.base64Data ? r.base64Data.length * 0.75 : 0),
+                  0
+                );
+                const approxBase64Mb = (
+                  approxBase64Bytes /
+                  (1024 * 1024)
+                ).toFixed(2);
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {DESKTOP_ARCHITECTURE_BOUNDARIES.map((spec) => {
-                      const isFrontend = spec.layer === 'frontend';
-                      return (
-                        <div
-                          key={spec.id}
-                          className={`p-6 rounded-2xl border space-y-3.5 bg-white shadow-2xs ${
-                            isFrontend
-                              ? 'border-blue-200/90'
-                              : 'border-emerald-200/90'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span
-                              className={`px-2.5 py-1 text-xs font-bold rounded-md ${
-                                isFrontend
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-emerald-700 text-white'
-                              }`}
-                            >
-                              {isFrontend ? '前台执行 (Renderer)' : '后台执行 (Main / Core)'}
-                            </span>
-                            <span className="text-xs font-mono-tabular text-slate-500 truncate">
-                              {spec.processName}
-                            </span>
-                          </div>
+                const handleReleaseCloudSyncedBase64Cache = () => {
+                  if (cloudSyncedRefsWithBase64.length === 0) {
+                    showToast(
+                      '当前没有需要释放的冗余 Base64 缓存（已处于最优轻量状态）',
+                      'info'
+                    );
+                    return;
+                  }
+                  const stripRedundantBase64 = (list: ReferenceImageItem[]) =>
+                    list.map((r) => {
+                      const hasValidCloudUrl = Boolean(
+                        r.ossUrl && /^https?:\/\//i.test(r.ossUrl)
+                      );
+                      if (!hasValidCloudUrl || !r.base64Data) return r;
+                      return {
+                        ...r,
+                        base64Data: '',
+                        previewUrl:
+                          r.previewUrl && r.previewUrl.startsWith('data:')
+                            ? r.ossUrl!
+                            : r.previewUrl || r.ossUrl!,
+                      };
+                    });
+                  setReferenceImages(stripRedundantBase64);
+                  setSkuReferenceImages(stripRedundantBase64);
+                  showToast(
+                    `已释放 ${cloudSyncedRefsWithBase64.length} 张已上云素材的本地冗余 Base64 内存（保留云端直链无损预览）`,
+                    'success'
+                  );
+                };
 
-                          <div className="text-base font-bold text-slate-900">
-                            {spec.title}
-                          </div>
-                          <p className="text-xs text-slate-600 leading-relaxed">
-                            {spec.summary}
+                const handleClearAllGenerationHistory = async () => {
+                  if (generationRecords.length === 0) {
+                    showToast('当前生图历史记录已为空', 'info');
+                    return;
+                  }
+                  const count = generationRecords.length;
+                  const ids = generationRecords.map((r) => r.id);
+                  setGenerationRecords([]);
+                  try {
+                    await deleteGenerationRecordsFromDb(ids);
+                  } catch {
+                    // Ignore
+                  }
+                  showToast(`已清空全部 ${count} 条本地生图历史记录`, 'success');
+                };
+
+                return (
+                  <div className="space-y-6">
+                    {/* Section 1: Local Storage Footprint Diagnostics & One-Click Cache Cleanup */}
+                    <div className="p-6 bg-white border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                            <Layers className="w-4 h-4 text-blue-600" />
+                            <span>
+                              一、本地存储占用统计与历史缓存一键清理（IndexedDB & LocalStorage）
+                            </span>
+                          </h4>
+                          <p className="text-xs text-slate-500 mt-1">
+                            实时监控双工作台内存、公共资产库与生图历史记录体积；支持一键释放已上云素材的冗余 Base64 缓存
                           </p>
+                        </div>
 
-                          <ul className="space-y-1.5 text-xs text-slate-700 list-disc pl-4 leading-relaxed">
-                            {spec.responsibilities.map((r, i) => (
-                              <li key={i}>{r}</li>
-                            ))}
-                          </ul>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={handleReleaseCloudSyncedBase64Cache}
+                            className="px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl cursor-pointer"
+                          >
+                            释放已上云素材 Base64 缓存 ({cloudSyncedRefsWithBase64.length}张)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleClearAllGenerationHistory}
+                            disabled={generationRecords.length === 0}
+                            className="px-3.5 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl cursor-pointer disabled:opacity-40"
+                          >
+                            清空生图历史记录 ({generationRecords.length}条)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              clearRuntimeLogs();
+                              showToast('已清空当前会话运行日志', 'info');
+                            }}
+                            disabled={runtimeLogs.length === 0}
+                            className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200/80 rounded-xl cursor-pointer disabled:opacity-40"
+                          >
+                            清空运行日志 ({runtimeLogs.length}条)
+                          </button>
+                        </div>
+                      </div>
 
-                          <div className="pt-2.5 border-t border-slate-100 text-xs text-slate-500 leading-relaxed">
-                            <strong className="text-slate-700">桌面化优势：</strong>
-                            {spec.desktopAdvantage}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+                        <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
+                          <div className="text-xs text-slate-500">
+                            双工作台在途素材
+                          </div>
+                          <div className="text-lg font-bold font-mono-tabular text-slate-900">
+                            {allWorkspaceRefs.length} 张
+                          </div>
+                          <div className="text-[11px] font-mono-tabular text-slate-500">
+                            本地 Base64 约 {approxBase64Mb} MB
                           </div>
                         </div>
-                      );
-                    })}
+
+                        <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
+                          <div className="text-xs text-slate-500">
+                            ③ 公共资产库 (IndexedDB)
+                          </div>
+                          <div className="text-lg font-bold font-mono-tabular text-blue-600">
+                            {commonAssets.length} 张
+                          </div>
+                          <div className="text-[11px] font-mono-tabular text-slate-500">
+                            已上云 {commonAssets.filter((a) => Boolean(a.ossUrl)).length} 张
+                          </div>
+                        </div>
+
+                        <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
+                          <div className="text-xs text-slate-500">
+                            生图历史归档 (IndexedDB)
+                          </div>
+                          <div className="text-lg font-bold font-mono-tabular text-emerald-700">
+                            {generationRecords.length} 条
+                          </div>
+                          <div className="text-[11px] font-mono-tabular text-slate-500">
+                            主图 {generationRecords.filter((r) => r.sourceStudio === 'sku_studio').length} · 详情 {generationRecords.filter((r) => r.sourceStudio === 'detail_studio').length}
+                          </div>
+                        </div>
+
+                        <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
+                          <div className="text-xs text-slate-500">
+                            已存全案母版 & 日志
+                          </div>
+                          <div className="text-lg font-bold font-mono-tabular text-slate-900">
+                            {confirmedTemplates.length} 套母版
+                          </div>
+                          <div className="text-[11px] font-mono-tabular text-slate-500">
+                            运行日志 {runtimeLogs.length} 条
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 2: Windows Desktop (Electron / Tauri) Foreground vs Background Architecture */}
+                    <div className="p-5 bg-slate-900 text-white rounded-2xl flex flex-wrap items-center justify-between gap-4">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2.5">
+                          <span className="px-2.5 py-0.5 text-[11px] font-bold bg-emerald-500 text-slate-950 rounded-md">
+                            IPC 桥接层已就绪
+                          </span>
+                          <h4 className="text-sm font-bold">
+                            二、Windows 桌面端 (Electron / Tauri) 前后台职责分离架构
+                          </h4>
+                        </div>
+                        <p className="text-xs text-slate-300 leading-relaxed">
+                          前端所有网络与 AI 调用已全部收拢至{' '}
+                          <code className="text-amber-300 font-mono-tabular">
+                            src/services/studioBridge.ts
+                          </code>
+                          ，打包 Windows 桌面端时可直接通过 Electron{' '}
+                          <code className="text-amber-300 font-mono-tabular">
+                            ipcMain.handle
+                          </code>{' '}
+                          或 Tauri{' '}
+                          <code className="text-amber-300 font-mono-tabular">
+                            #[tauri::command]
+                          </code>{' '}
+                          无缝接管。
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {DESKTOP_ARCHITECTURE_BOUNDARIES.map((spec) => {
+                        const isFrontend = spec.layer === 'frontend';
+                        return (
+                          <div
+                            key={spec.id}
+                            className={`p-6 rounded-2xl border space-y-3.5 bg-white shadow-2xs ${
+                              isFrontend
+                                ? 'border-blue-200/90'
+                                : 'border-emerald-200/90'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span
+                                className={`px-2.5 py-1 text-xs font-bold rounded-md ${
+                                  isFrontend
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-emerald-700 text-white'
+                                }`}
+                              >
+                                {isFrontend
+                                  ? '前台执行 (Renderer)'
+                                  : '后台执行 (Main / Core)'}
+                              </span>
+                              <span className="text-xs font-mono-tabular text-slate-500 truncate">
+                                {spec.processName}
+                              </span>
+                            </div>
+
+                            <div className="text-base font-bold text-slate-900">
+                              {spec.title}
+                            </div>
+                            <p className="text-xs text-slate-600 leading-relaxed">
+                              {spec.summary}
+                            </p>
+
+                            <ul className="space-y-1.5 text-xs text-slate-700 list-disc pl-4 leading-relaxed">
+                              {spec.responsibilities.map((r, i) => (
+                                <li key={i}>{r}</li>
+                              ))}
+                            </ul>
+
+                            <div className="pt-2.5 border-t border-slate-100 text-xs text-slate-500 leading-relaxed">
+                              <strong className="text-slate-700">
+                                桌面化优势：
+                              </strong>
+                              {spec.desktopAdvantage}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
 
             {/* Modal Footer */}
